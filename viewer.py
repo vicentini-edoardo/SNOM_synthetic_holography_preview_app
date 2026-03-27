@@ -9,7 +9,7 @@ from matplotlib.figure import Figure
 from matplotlib import colormaps
 from matplotlib.widgets import RangeSlider
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -37,6 +37,7 @@ if __package__:
     from .processing import (
         AMPLITUDE_ONLY_STAGES,
         PASSAGE_TO_KEYS,
+        PROCESSING_MODES,
         ProcessingError,
         STAGE_LABELS,
         export_all_views,
@@ -47,6 +48,7 @@ else:
     from processing import (
         AMPLITUDE_ONLY_STAGES,
         PASSAGE_TO_KEYS,
+        PROCESSING_MODES,
         ProcessingError,
         STAGE_LABELS,
         export_all_views,
@@ -76,6 +78,7 @@ COLORS = {
     "magenta": "#f36dff",
     "magenta_strong": "#cc43ff",
     "danger": "#ff4fc7",
+    "gold": "#ffd166",
 }
 
 APP_QSS = f"""
@@ -182,9 +185,10 @@ class HologramViewerWindow(QMainWindow):
         self.resize(1500, 980)
         self.loaded = None
         self.loaded_by_passage: dict[str, object] = {}
-        self.override_by_passage: dict[str, dict[str, int]] = {}
+        self.override_by_passage: dict[str, dict[str, dict[str, int]]] = {}
         self.loaded_folder_path: str | None = None
-        self._sliders: list[RangeSlider] = []
+        self.processing_mode = "two_sideband"
+        self._sliders: list[tuple[RangeSlider, int]] = []
         self._apply_theme()
         self._build_ui()
         self._sync_advanced_settings()
@@ -283,7 +287,7 @@ class HologramViewerWindow(QMainWindow):
         self.harmonic_combo.addItems([str(i) for i in range(1, 6)])
         self.harmonic_combo.setCurrentText("1")
         self.harmonic_combo.setMinimumWidth(150)
-        self.harmonic_combo.currentIndexChanged.connect(self.refresh_plot)
+        self.harmonic_combo.currentIndexChanged.connect(self._on_harmonic_change)
         layout.addWidget(self.harmonic_combo, 0, 5)
 
         view_title = QLabel("View")
@@ -315,17 +319,26 @@ class HologramViewerWindow(QMainWindow):
         advanced_layout.setHorizontalSpacing(10)
         advanced_layout.setVerticalSpacing(10)
 
-        self.auto_shift_value = self._metric_row(advanced_layout, 0, "Detected Shift (px)")
-        self.auto_width_value = self._metric_row(advanced_layout, 1, "Detected Width (px)")
-        self.zero_order_width_value = self._metric_row(advanced_layout, 2, "0th Order Width (px)")
-        self.first_order_width_value = self._metric_row(advanced_layout, 3, "1st Order Width (px)")
+        advanced_layout.addWidget(QLabel("Processing Mode"), 0, 0)
+        self.processing_mode_combo = QComboBox()
+        for mode_key, mode_label in PROCESSING_MODES.items():
+            self.processing_mode_combo.addItem(mode_label, mode_key)
+        self.processing_mode_combo.setCurrentIndex(self.processing_mode_combo.findData(self.processing_mode))
+        self.processing_mode_combo.currentIndexChanged.connect(self._on_processing_mode_change)
+        advanced_layout.addWidget(self.processing_mode_combo, 0, 1)
 
-        advanced_layout.addWidget(QLabel("Current Shift (px)"), 4, 0)
+        self.auto_shift_value = self._metric_row(advanced_layout, 1, "Detected Shift (px)")
+        self.auto_width_value = self._metric_row(advanced_layout, 2, "Detected Width (px)")
+        self.zero_order_width_value = self._metric_row(advanced_layout, 3, "0th Order Width (px)")
+        self.first_order_width_value = self._metric_row(advanced_layout, 4, "1st Order Width (px)")
+        self.rotation_angle_value = self._metric_row(advanced_layout, 5, "Rotation Angle (deg)")
+
+        advanced_layout.addWidget(QLabel("Current Shift (px)"), 6, 0)
         self.shift_edit = QLineEdit()
-        advanced_layout.addWidget(self.shift_edit, 4, 1)
-        advanced_layout.addWidget(QLabel("Current Width (px)"), 5, 0)
+        advanced_layout.addWidget(self.shift_edit, 6, 1)
+        advanced_layout.addWidget(QLabel("Current Width (px)"), 7, 0)
         self.width_edit = QLineEdit()
-        advanced_layout.addWidget(self.width_edit, 5, 1)
+        advanced_layout.addWidget(self.width_edit, 7, 1)
 
         button_row = QHBoxLayout()
         self.apply_advanced_button = QPushButton("Apply")
@@ -335,7 +348,7 @@ class HologramViewerWindow(QMainWindow):
         self.reset_advanced_button.setObjectName("accent")
         button_row.addWidget(self.apply_advanced_button)
         button_row.addWidget(self.reset_advanced_button)
-        advanced_layout.addLayout(button_row, 6, 0, 1, 2)
+        advanced_layout.addLayout(button_row, 8, 0, 1, 2)
 
         layout.addWidget(self.advanced_content)
         layout.addItem(QSpacerItem(20, 20, QSizePolicy.Minimum, QSizePolicy.Expanding))
@@ -365,9 +378,52 @@ class HologramViewerWindow(QMainWindow):
             f"QToolButton {{ background: rgba(10,27,48,0.92); border: 1px solid {COLORS['line']}; border-radius: 8px; padding: 6px; color: {COLORS['text']}; }}"
             f"QToolButton:hover {{ border-color: {COLORS['cyan_strong']}; }}"
         )
+        self._recolor_toolbar_icons()
         layout.addWidget(self.canvas, 1)
         layout.addWidget(self.toolbar, 0)
         return panel
+
+    def _tint_icon(self, icon: QIcon, color: str) -> QIcon:
+        size = self.toolbar.iconSize()
+        tinted_icon = QIcon()
+        color_value = QColor(color)
+        state_pairs = (
+            (QIcon.Mode.Normal, QIcon.State.Off),
+            (QIcon.Mode.Active, QIcon.State.Off),
+            (QIcon.Mode.Selected, QIcon.State.Off),
+            (QIcon.Mode.Disabled, QIcon.State.Off),
+        )
+        for mode, state in state_pairs:
+            source = icon.pixmap(size, mode, state)
+            if source.isNull():
+                continue
+            tinted = QPixmap(source.size())
+            tinted.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(tinted)
+            painter.drawPixmap(0, 0, source)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+            painter.fillRect(tinted.rect(), color_value)
+            painter.end()
+            tinted_icon.addPixmap(tinted, mode, state)
+        return tinted_icon if not tinted_icon.isNull() else icon
+
+    def _recolor_toolbar_icons(self) -> None:
+        accent_map = {
+            "Home": COLORS["cyan"],
+            "Back": COLORS["text"],
+            "Forward": COLORS["text"],
+            "Pan": COLORS["cyan_strong"],
+            "Zoom": COLORS["cyan_strong"],
+            "Subplots": COLORS["magenta"],
+            "Customize": COLORS["magenta"],
+            "Save": COLORS["gold"],
+        }
+        for action in self.toolbar.actions():
+            icon = action.icon()
+            if icon.isNull():
+                continue
+            accent = accent_map.get(action.text(), COLORS["text"])
+            action.setIcon(self._tint_icon(icon, accent))
 
     def _build_log_panel(self) -> QWidget:
         panel = self._panel()
@@ -406,6 +462,14 @@ class HologramViewerWindow(QMainWindow):
     def _current_stage(self) -> str:
         return self.view_combo.currentText()
 
+    def _current_processing_mode(self) -> str:
+        return self.processing_mode
+
+    def _current_override_bucket(self) -> dict[str, int]:
+        passage = self._current_passage()
+        mode = self._current_processing_mode()
+        return self.override_by_passage.setdefault(passage, {}).setdefault(mode, {})
+
     def _clear_loaded_state(self) -> None:
         self.loaded = None
         self.loaded_by_passage = {}
@@ -431,6 +495,7 @@ class HologramViewerWindow(QMainWindow):
                 self.auto_width_value,
                 self.zero_order_width_value,
                 self.first_order_width_value,
+                self.rotation_angle_value,
             ):
                 label.setText("-")
             self.shift_edit.setText("")
@@ -445,12 +510,36 @@ class HologramViewerWindow(QMainWindow):
         self.first_order_width_value.setText(f"{settings['first_order_width_y']:.2f}")
         self.shift_edit.setText(str(settings["current_shift_y"]))
         self.width_edit.setText(str(settings["current_filter_width_y"]))
+        harmonic_index = self._current_harmonic()
+        rotation_by_harmonic = settings.get("rotation_angle_deg_by_harmonic", [])
+        if settings.get("processing_mode") == "two_sideband" and harmonic_index < len(rotation_by_harmonic):
+            rotation_angle = rotation_by_harmonic[harmonic_index]
+            self.rotation_angle_value.setText("-" if not np.isfinite(rotation_angle) else f"{rotation_angle:.2f}")
+        else:
+            self.rotation_angle_value.setText("-")
         self._set_advanced_controls_enabled(True)
 
     def _on_passage_change(self) -> None:
         folder = self.folder_edit.text().strip()
         if folder and os.path.isdir(folder):
             self.load_current_folder()
+        else:
+            self._sync_advanced_settings()
+
+    def _on_harmonic_change(self) -> None:
+        self.refresh_plot()
+        self._sync_advanced_settings()
+
+    def _on_processing_mode_change(self) -> None:
+        mode = self.processing_mode_combo.currentData()
+        if not isinstance(mode, str) or mode == self.processing_mode:
+            return
+        self.processing_mode = mode
+        self.loaded = None
+        self.loaded_by_passage = {}
+        folder = self.folder_edit.text().strip()
+        if folder and os.path.isdir(folder):
+            self.load_current_folder(force_reload=True)
         else:
             self._sync_advanced_settings()
 
@@ -473,19 +562,20 @@ class HologramViewerWindow(QMainWindow):
             self.loaded = self.loaded_by_passage[passage]
             self.log(
                 f"Loaded cached {PASSAGE_TO_KEYS[self.loaded.passage]['label']} from {self.loaded.folder_path} "
-                f"with cache {self.loaded.cache_path}."
+                f"with cache {self.loaded.cache_path} in {PROCESSING_MODES[self.processing_mode]} mode."
             )
             self._sync_advanced_settings()
             self.refresh_plot()
             return
 
-        overrides = self.override_by_passage.get(passage, {})
+        overrides = self.override_by_passage.get(passage, {}).get(self.processing_mode, {})
         try:
             self.loaded = load_passage(
                 folder,
                 passage,
                 carrier_row_override=overrides.get("center_row"),
                 filter_width_override=overrides.get("filter_width_y"),
+                processing_mode=self.processing_mode,
             )
         except ProcessingError as exc:
             QMessageBox.critical(self, "Load failed", str(exc))
@@ -495,7 +585,7 @@ class HologramViewerWindow(QMainWindow):
         self.loaded_by_passage[passage] = self.loaded
         self.log(
             f"Loaded {PASSAGE_TO_KEYS[self.loaded.passage]['label']} from {self.loaded.folder_path} "
-            f"with cache {self.loaded.cache_path}."
+            f"with cache {self.loaded.cache_path} in {PROCESSING_MODES[self.processing_mode]} mode."
         )
         self._sync_advanced_settings()
         self.refresh_plot()
@@ -516,11 +606,13 @@ class HologramViewerWindow(QMainWindow):
             return
 
         fft_center_row = self.loaded.processing_settings["fft_center_row"]
-        passage = self._current_passage()
-        self.override_by_passage[passage] = {
+        overrides = self._current_override_bucket()
+        overrides.clear()
+        overrides.update({
             "center_row": fft_center_row - shift_y,
             "filter_width_y": filter_width_y,
-        }
+        })
+        passage = self._current_passage()
         self.loaded_by_passage.pop(passage, None)
         self.load_current_folder(force_reload=True)
 
@@ -528,7 +620,10 @@ class HologramViewerWindow(QMainWindow):
         if self.loaded is None:
             return
         passage = self._current_passage()
-        self.override_by_passage.pop(passage, None)
+        passage_overrides = self.override_by_passage.get(passage, {})
+        passage_overrides.pop(self.processing_mode, None)
+        if not passage_overrides:
+            self.override_by_passage.pop(passage, None)
         self.loaded_by_passage.pop(passage, None)
         self.load_current_folder(force_reload=True)
 
@@ -588,23 +683,38 @@ class HologramViewerWindow(QMainWindow):
             zorder=0,
         )
         slider = RangeSlider(slider_axis, label, data_min, data_max, valinit=(slider_min, slider_max))
-        slider.label.set_color(COLORS["text"])
-        slider.valtext.set_color(COLORS["text"])
-        slider.track.set_color((1.0, 1.0, 1.0, 0.08))
-        slider.poly.set_color((1.0, 1.0, 1.0, 0.0))
+        slider.label.set_color(accent_color)
+        slider.valtext.set_color(COLORS["gold"])
+        slider.track.set_color((1.0, 1.0, 1.0, 0.12))
+        slider.poly.set_color(QColor(accent_color).lighter(150).name())
+        slider.poly.set_alpha(0.25)
         for handle in slider._handles:
             handle.set_color(QColor(accent_color).name())
+            handle.set_markeredgecolor(COLORS["gold"])
+            handle.set_markeredgewidth(1.4)
 
         def _update(_value) -> None:
-            image_artist.set_clim(*slider.val)
-            self.canvas.draw_idle()
+            try:
+                image_artist.set_clim(*slider.val)
+                self.canvas.draw_idle()
+            except (NotImplementedError, ValueError):
+                # A stale slider can outlive the previous figure during a redraw.
+                return
 
-        slider.on_changed(_update)
-        self._sliders.append(slider)
+        callback_id = slider.on_changed(_update)
+        self._sliders.append((slider, callback_id))
+
+    def _disconnect_sliders(self) -> None:
+        for slider, callback_id in self._sliders:
+            try:
+                slider.disconnect(callback_id)
+            except Exception:
+                pass
+        self._sliders = []
 
     def refresh_plot(self) -> None:
+        self._disconnect_sliders()
         self.figure.clear()
-        self._sliders = []
         self._style_matplotlib()
 
         if self.loaded is None:
@@ -666,10 +776,22 @@ class HologramViewerWindow(QMainWindow):
         try:
             harmonic_index = self._current_harmonic()
             stage_name = self._current_stage()
-            amplitude_image = get_view_image(self.loaded.stage_stacks, harmonic_index, stage_name, "amplitude")
+            amplitude_image = get_view_image(
+                self.loaded.stage_stacks,
+                harmonic_index,
+                stage_name,
+                "amplitude",
+                processing_settings=self.loaded.processing_settings,
+            )
             phase_image = None
             if stage_name not in AMPLITUDE_ONLY_STAGES:
-                phase_image = get_view_image(self.loaded.stage_stacks, harmonic_index, stage_name, "phase")
+                phase_image = get_view_image(
+                    self.loaded.stage_stacks,
+                    harmonic_index,
+                    stage_name,
+                    "phase",
+                    processing_settings=self.loaded.processing_settings,
+                )
         except ProcessingError as exc:
             QMessageBox.critical(self, "Display error", str(exc))
             self.log(f"Display error: {exc}")

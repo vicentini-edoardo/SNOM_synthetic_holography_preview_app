@@ -6,9 +6,17 @@ from typing import Any
 
 import numpy as np
 from matplotlib.figure import Figure
-from scipy import signal
-from scipy.fft import fft2, fftshift, ifft2, ifftshift
 from scipy.linalg import lstsq
+
+from hologram_opening import (
+    build_vertical_profile,
+    PROCESSING_MODES,
+    ProcessingError,
+    correct_baseline_slope,
+    measure_profile_width,
+    open_hologram_2d,
+    processed_phase,
+)
 
 
 PASSAGE_TO_KEYS = {
@@ -24,10 +32,6 @@ STAGE_LABELS = {
     "filtered_shift": "Filtered Shift",
 }
 AMPLITUDE_ONLY_STAGES = {"mag_signal_ft", "filtered_shift"}
-
-
-class ProcessingError(RuntimeError):
-    pass
 
 
 @dataclass
@@ -166,216 +170,18 @@ def validate_passage_data(data: dict[str, np.ndarray], passage: str) -> dict[str
     return keys
 
 
-def tukey_filter_func(width: int, length: int, alpha: float) -> np.ndarray:
-    width = max(2, min(int(width), length))
-    if width % 2 == 1:
-        width += 1
-    width = min(width, length)
-
-    filter_window = np.zeros(length)
-    start = (length - width) // 2
-    stop = start + width
-    filter_window[start:stop] = signal.windows.tukey(width, alpha)
-    return filter_window
-
-
-def _build_vertical_profile(magnitude_ft: np.ndarray) -> np.ndarray:
-    profile = np.log1p(np.mean(magnitude_ft, axis=1))
-    kernel_size = max(5, min(21, profile.size // 32))
-    if kernel_size % 2 == 0:
-        kernel_size += 1
-    kernel = np.ones(kernel_size, dtype=float) / kernel_size
-    return np.convolve(profile, kernel, mode="same")
-
-
-def _refine_peak_subpixel(profile: np.ndarray, peak_idx: int) -> float:
-    if peak_idx <= 0 or peak_idx >= profile.size - 1:
-        return float(peak_idx)
-
-    left = profile[peak_idx - 1]
-    center = profile[peak_idx]
-    right = profile[peak_idx + 1]
-    denominator = left - 2 * center + right
-    if abs(denominator) < 1e-12:
-        return float(peak_idx)
-
-    offset = 0.5 * (left - right) / denominator
-    return float(np.clip(peak_idx + offset, peak_idx - 0.5, peak_idx + 0.5))
-
-
-def _find_vertical_carrier(profile: np.ndarray) -> float:
-    center_idx = profile.size // 2
-    exclusion_half_width = max(8, profile.size // 32)
-    edge_margin = 2
-    search_stop = center_idx - exclusion_half_width
-
-    peaks, peak_properties = signal.find_peaks(
-        profile[:search_stop],
-        distance=max(4, profile.size // 64),
-        prominence=max(np.std(profile) * 0.25, 1e-6),
-    )
-    valid_peaks = [peak for peak in peaks if edge_margin <= peak < search_stop - edge_margin]
-    if valid_peaks:
-        prominences = peak_properties["prominences"]
-        peak_order = {peak: idx for idx, peak in enumerate(peaks)}
-        peak_idx = int(max(valid_peaks, key=lambda peak: prominences[peak_order[peak]] * profile[peak]))
-        return _refine_peak_subpixel(profile, peak_idx)
-
-    search_profile = profile.copy()
-    search_profile[:edge_margin] = -np.inf
-    search_profile[search_stop:] = -np.inf
-    peak_idx = int(np.argmax(search_profile))
-    if not np.isfinite(search_profile[peak_idx]):
-        raise ProcessingError("Unable to find a valid vertical carrier away from the zero order.")
-    return _refine_peak_subpixel(profile, peak_idx)
-
-
-def _estimate_filter_width(profile: np.ndarray, carrier_row: float) -> int:
-    center_idx = profile.size // 2
-    distance_to_zero_order = abs(carrier_row - center_idx)
-    carrier_row_int = int(round(carrier_row))
-    distance_to_edge = min(carrier_row_int, profile.size - carrier_row_int - 1)
-    width = int(min(distance_to_zero_order, distance_to_edge))
-    if width < 2:
-        raise ProcessingError("Detected carrier is too close to the zero order to build a stable filter.")
-    return width
-
-
-def _measure_profile_width(profile: np.ndarray, row_idx: int) -> float:
-    if row_idx < 0 or row_idx >= profile.size:
-        raise ProcessingError(f"Cannot measure profile width at invalid row {row_idx}.")
-
-    search_radius = max(3, profile.size // 64)
-    start = max(0, row_idx - search_radius)
-    stop = min(profile.size, row_idx + search_radius + 1)
-    local_idx = int(np.argmax(profile[start:stop])) + start
-
-    peaks, _ = signal.find_peaks(profile[start:stop])
-    if peaks.size > 0:
-        peak_candidates = peaks + start
-        local_idx = int(min(peak_candidates, key=lambda idx: abs(idx - row_idx)))
-
-    width = float(signal.peak_widths(profile, [local_idx], rel_height=0.5)[0][0])
-    if width <= 0:
-        threshold = 0.5 * profile[local_idx]
-        above = np.flatnonzero(profile >= threshold)
-        if above.size > 0:
-            contiguous = above[(above >= start) & (above < stop)]
-            if contiguous.size > 0:
-                width = float(contiguous[-1] - contiguous[0] + 1)
-    return width
-
-
-def _normalize_filter_width(width: int, length: int) -> int:
-    width = max(2, min(int(round(width)), length))
-    if width % 2 == 1:
-        width += 1
-    return min(width, length)
-
-
-def _band_bounds(center_row: int, width: int, length: int) -> tuple[int, int]:
-    width = _normalize_filter_width(width, length)
-    start = center_row - width // 2
-    stop = start + width
-    if start < 0:
-        stop -= start
-        start = 0
-    if stop > length:
-        start -= stop - length
-        stop = length
-    start = max(0, start)
-    stop = min(length, stop)
-    if stop - start < 2:
-        raise ProcessingError("Vertical filter band is too narrow after clamping.")
-    return start, stop
-
-
-def _validate_vertical_filter(length: int, center_row: int, filter_width_y: int) -> tuple[int, int]:
-    center_idx = length // 2
-    exclusion_half_width = max(8, length // 32)
-    if center_row >= center_idx - exclusion_half_width:
-        raise ProcessingError("Carrier center must stay above the zero-order exclusion band.")
-    if center_row < 1 or center_row >= length - 1:
-        raise ProcessingError("Carrier center must stay inside the Fourier-space image bounds.")
-
-    width = _normalize_filter_width(filter_width_y, length)
-    start, stop = _band_bounds(center_row, width, length)
-    if stop >= center_idx - exclusion_half_width + 1:
-        raise ProcessingError("Filter width reaches the zero order; reduce the width or move the center upward.")
-    return center_row, width
-
-
-def _build_sideband_filter(length: int, center_row: int, filter_width_y: int, alpha: float) -> np.ndarray:
-    start, stop = _band_bounds(center_row, filter_width_y, length)
-    filter_window = np.zeros(length)
-    filter_window[start:stop] = signal.windows.tukey(stop - start, alpha)
-    return filter_window
-
-
-def _shift_band_to_center(filtered_ft: np.ndarray, source_center_row: int) -> np.ndarray:
-    length = filtered_ft.shape[0]
-    target_center_row = length // 2
-    shift = target_center_row - source_center_row
-    shifted = np.zeros_like(filtered_ft)
-
-    src_start = max(0, -shift)
-    src_stop = min(length, length - shift)
-    dst_start = max(0, shift)
-    dst_stop = min(length, length + shift)
-    shifted[dst_start:dst_stop, :] = filtered_ft[src_start:src_stop, :]
-    return shifted
-
-
-def open_hologram_2d(
-    image_complex_in_2d: np.ndarray,
-    pad_fact: int = 1,
-    alpha: float = 0.3,
-    carrier_row: int | None = None,
-    filter_width_y: int = 0,
-) -> tuple[dict[str, np.ndarray], int, int]:
-    signal_in = image_complex_in_2d
-    n_x, n_y = signal_in.shape[1], signal_in.shape[0]
-
-    n_x2, n_y2 = n_x, n_y * pad_fact
-    signal_pad = np.zeros((n_y2, n_x2), dtype=complex)
-    start_y, start_x = (n_y2 - n_y) // 2, (n_x2 - n_x) // 2
-    signal_pad[start_y : start_y + n_y, start_x : start_x + n_x] = signal_in
-
-    signal_ft = fftshift(fft2(signal_pad))
-    mag_signal_ft = np.abs(signal_ft)
-    vertical_profile = _build_vertical_profile(mag_signal_ft)
-
-    if carrier_row is None:
-        carrier_row = int(round(_find_vertical_carrier(vertical_profile)))
-    if filter_width_y <= 0:
-        filter_width_y = _estimate_filter_width(vertical_profile, carrier_row)
-    carrier_row, filter_width_y = _validate_vertical_filter(n_y2, int(round(carrier_row)), filter_width_y)
-
-    # Keep only the detected vertical sideband in shifted Fourier space, then
-    # translate that band directly to the Fourier center without wraparound.
-    sideband_filter = _build_sideband_filter(n_y2, carrier_row, filter_width_y, alpha)[:, np.newaxis]
-    filtered_sideband = signal_ft * sideband_filter
-    filtered_shift = _shift_band_to_center(filtered_sideband, carrier_row)
-
-    filtered = ifft2(ifftshift(filtered_shift))
-    image_complex_out = filtered[start_y : start_y + n_y, start_x : start_x + n_x]
-    stage_images = {
-        "processed": image_complex_out,
-        "mag_signal_ft": mag_signal_ft,
-        "filtered_shift": filtered_shift,
-    }
-    return stage_images, carrier_row, filter_width_y
-
-
 def process_stack(
     raw_stack: np.ndarray,
     pad_fact: int = 1,
     alpha: float = 0.3,
     carrier_row_override: int | None = None,
     filter_width_override: int | None = None,
+    processing_mode: str = "two_sideband",
 ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
     if raw_stack.ndim != 3:
         raise ProcessingError(f"Expected raw stack with shape [row, col, harmonic], got {raw_stack.shape}.")
+    if processing_mode not in PROCESSING_MODES:
+        raise ProcessingError(f"Unknown processing mode: {processing_mode}")
 
     reference_harmonic = 2
     fft_center_row = (raw_stack.shape[0] * pad_fact) // 2
@@ -384,13 +190,13 @@ def process_stack(
     if not _harmonic_is_present(raw_stack, reference_harmonic):
         raise ProcessingError("The raw stack is missing harmonic index 2 required for hologram opening.")
 
-    auto_reference_stages, auto_center_row, auto_filter_width_y = open_hologram_2d(
-        raw_stack[:, :, reference_harmonic], pad_fact, alpha
+    auto_reference_stages, auto_center_row, auto_filter_width_y, auto_reference_diagnostics = open_hologram_2d(
+        raw_stack[:, :, reference_harmonic], pad_fact, alpha, processing_mode=processing_mode
     )
     auto_mag_signal_ft = auto_reference_stages["mag_signal_ft"]
-    auto_vertical_profile = _build_vertical_profile(auto_mag_signal_ft)
-    zero_order_width_y = _measure_profile_width(auto_vertical_profile, fft_center_row)
-    first_order_width_y = _measure_profile_width(auto_vertical_profile, auto_center_row)
+    auto_vertical_profile = build_vertical_profile(auto_mag_signal_ft)
+    zero_order_width_y = measure_profile_width(auto_vertical_profile, fft_center_row)
+    first_order_width_y = measure_profile_width(auto_vertical_profile, auto_center_row)
     current_center_row = auto_center_row if carrier_row_override is None else int(round(carrier_row_override))
     current_filter_width_y = (
         auto_filter_width_y if filter_width_override is None else int(round(filter_width_override))
@@ -398,15 +204,17 @@ def process_stack(
     is_manual = carrier_row_override is not None or filter_width_override is not None
 
     if is_manual:
-        reference_stages, current_center_row, current_filter_width_y = open_hologram_2d(
+        reference_stages, current_center_row, current_filter_width_y, reference_diagnostics = open_hologram_2d(
             raw_stack[:, :, reference_harmonic],
             pad_fact,
             alpha,
             carrier_row=current_center_row,
             filter_width_y=current_filter_width_y,
+            processing_mode=processing_mode,
         )
     else:
         reference_stages = auto_reference_stages
+        reference_diagnostics = auto_reference_diagnostics
 
     stage_stacks = {"raw": raw_stack.copy()}
     for stage_name, reference_image in reference_stages.items():
@@ -419,22 +227,34 @@ def process_stack(
     for stage_name, reference_image in reference_stages.items():
         stage_stacks[stage_name][:, :, reference_harmonic] = reference_image
 
+    rotation_angle_rad_by_harmonic = [float("nan")] * raw_stack.shape[2]
+    rotation_angle_deg_by_harmonic = [float("nan")] * raw_stack.shape[2]
+    mirror_row_by_harmonic = [-1] * raw_stack.shape[2]
+    rotation_angle_rad_by_harmonic[reference_harmonic] = float(reference_diagnostics["rotation_angle_rad"])
+    rotation_angle_deg_by_harmonic[reference_harmonic] = float(reference_diagnostics["rotation_angle_deg"])
+    mirror_row_by_harmonic[reference_harmonic] = int(reference_diagnostics["mirror_row"])
+
     for idx in range(raw_stack.shape[2]):
         if idx == reference_harmonic:
             continue
         if not _harmonic_is_present(raw_stack, idx):
             continue
-        processed_stages, _, _ = open_hologram_2d(
+        processed_stages, _, _, diagnostics = open_hologram_2d(
             raw_stack[:, :, idx],
             pad_fact=pad_fact,
             alpha=alpha,
             carrier_row=current_center_row,
             filter_width_y=current_filter_width_y,
+            processing_mode=processing_mode,
         )
         for stage_name, image in processed_stages.items():
             stage_stacks[stage_name][:, :, idx] = image
+        rotation_angle_rad_by_harmonic[idx] = float(diagnostics["rotation_angle_rad"])
+        rotation_angle_deg_by_harmonic[idx] = float(diagnostics["rotation_angle_deg"])
+        mirror_row_by_harmonic[idx] = int(diagnostics["mirror_row"])
 
     processing_settings = {
+        "processing_mode": processing_mode,
         "fft_center_row": fft_center_row,
         "auto_center_row": auto_center_row,
         "auto_filter_width_y": auto_filter_width_y,
@@ -447,19 +267,14 @@ def process_stack(
         "is_manual": is_manual,
         "pad_fact": pad_fact,
         "alpha": alpha,
+        "mirror_row": int(reference_diagnostics["mirror_row"]),
+        "rotation_angle_rad": float(reference_diagnostics["rotation_angle_rad"]),
+        "rotation_angle_deg": float(reference_diagnostics["rotation_angle_deg"]),
+        "rotation_angle_rad_by_harmonic": rotation_angle_rad_by_harmonic,
+        "rotation_angle_deg_by_harmonic": rotation_angle_deg_by_harmonic,
+        "mirror_row_by_harmonic": mirror_row_by_harmonic,
     }
     return stage_stacks, processing_settings
-
-
-def correct_baseline_slope(z_values: np.ndarray) -> np.ndarray:
-    rows, cols = z_values.shape
-    x_vals, y_vals = np.meshgrid(np.arange(cols), np.arange(rows))
-    matrix_a = np.c_[x_vals.flatten(), y_vals.flatten(), np.ones(rows * cols)]
-    matrix_b = z_values.flatten()
-    coeffs, _, _, _ = lstsq(matrix_a, matrix_b)
-    z_fit = coeffs[0] * x_vals + coeffs[1] * y_vals + coeffs[2]
-    return z_values - z_fit
-
 
 def load_passage(
     folder_path: str,
@@ -467,6 +282,7 @@ def load_passage(
     force_rebuild: bool = False,
     carrier_row_override: int | None = None,
     filter_width_override: int | None = None,
+    processing_mode: str = "two_sideband",
 ) -> LoadedData:
     data, metadata = build_or_load_cache(folder_path, force_rebuild=force_rebuild)
     keys = validate_passage_data(data, passage)
@@ -474,6 +290,7 @@ def load_passage(
         data[keys["o"]],
         carrier_row_override=carrier_row_override,
         filter_width_override=filter_width_override,
+        processing_mode=processing_mode,
     )
 
     loaded = LoadedData(
@@ -496,6 +313,7 @@ def get_view_image(
     harmonic_index: int,
     stage_name: str,
     representation: str,
+    processing_settings: dict[str, Any] | None = None,
 ) -> np.ndarray:
     if stage_name not in stage_stacks:
         raise ProcessingError(f"Unknown view stage: {stage_name}")
@@ -512,9 +330,12 @@ def get_view_image(
     if representation == "amplitude":
         return np.abs(image)
     if representation == "phase":
-        phase = np.unwrap(np.angle(image))
         if stage_name == "processed":
-            return correct_baseline_slope(phase)
+            processing_mode = "two_sideband"
+            if processing_settings is not None:
+                processing_mode = processing_settings.get("processing_mode", "two_sideband")
+            return processed_phase(image, processing_mode=processing_mode)
+        phase = np.unwrap(np.angle(image))
         return phase
     raise ProcessingError(f"Unknown representation: {representation}")
 
@@ -544,7 +365,13 @@ def export_all_views(loaded: LoadedData) -> list[str]:
             "processed_phase": ("processed", "phase", "bwr"),
         }
         for name, (stage_name, representation, cmap) in views.items():
-            image = get_view_image(loaded.stage_stacks, harmonic_index, stage_name, representation)
+            image = get_view_image(
+                loaded.stage_stacks,
+                harmonic_index,
+                stage_name,
+                representation,
+                processing_settings=loaded.processing_settings,
+            )
             output_path = os.path.join(loaded.folder_path, f"h{harmonic}_{name}.png")
             title = f"H{harmonic} {STAGE_LABELS[stage_name]} {representation.capitalize()} - {loaded.image_name}"
             _export_figure(image, title, output_path, cmap)

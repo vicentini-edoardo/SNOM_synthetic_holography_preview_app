@@ -50,6 +50,22 @@ python3 main.py
 python3 main.py "/path/to/data/folder"
 ```
 
+## Jupyter Notebooks
+
+Two example notebooks are included under [output/jupyter-notebook](/Users/edoardolab/Documents/GitHub/SNOM_synthetic_holography_preview_app/output/jupyter-notebook):
+
+- [simple-two-sideband-processing-example.ipynb](/Users/edoardolab/Documents/GitHub/SNOM_synthetic_holography_preview_app/output/jupyter-notebook/simple-two-sideband-processing-example.ipynb): minimal real-data workflow with folder path, passage, and harmonic selection, then raw/processed amplitude and phase output using two-sideband processing only.
+- [standalone-hologram-opening-example.ipynb](/Users/edoardolab/Documents/GitHub/SNOM_synthetic_holography_preview_app/output/jupyter-notebook/standalone-hologram-opening-example.ipynb): more detailed standalone example showing direct use of `hologram_opening.py` on either measured data or a synthetic hologram, including intermediate returned stages.
+
+Launch Jupyter from the repository root:
+
+```bash
+python3 -m jupyter lab output/jupyter-notebook/simple-two-sideband-processing-example.ipynb
+python3 -m jupyter lab output/jupyter-notebook/standalone-hologram-opening-example.ipynb
+```
+
+Both notebooks assume Jupyter was started from the repository root so local imports like `hologram_opening` and `processing` resolve correctly.
+
 ## Expected Data Layout
 
 The app expects a folder containing SNOM `.gsf` files named with the existing project convention, for example:
@@ -88,13 +104,17 @@ For each harmonic `1..5`, the app exports:
 main.py
 viewer.py
 processing.py
+hologram_opening.py
+output/jupyter-notebook/
 requirements.txt
 GUI.png
 ```
 
 - `main.py`: application entry point
 - `viewer.py`: PySide6 GUI and Matplotlib integration
-- `processing.py`: hologram loading, reconstruction, diagnostics, and export logic
+- `processing.py`: hologram loading, app-facing reconstruction pipeline, diagnostics, and export logic
+- `hologram_opening.py`: standalone hologram opening utilities for scripts and notebooks
+- `output/jupyter-notebook/`: example notebooks for standalone processing workflows
 
 ## Packaging
 
