@@ -93,7 +93,7 @@ These controls should be visually grouped together because they define what is c
 Contains:
 
 - detected diagnostics values
-- current override inputs
+- current override inputs for shift, width, and padding factor
 - apply and reset actions
 
 The current “show advanced” behavior should be replaced with a compact collapsible tuning section that is expanded by default after a dataset is loaded. This keeps tuning immediately available during active inspection while still allowing the rail to stay dense when the user wants to collapse it. The section should feel like precision adjustment controls, not a hidden secondary form.
@@ -177,10 +177,24 @@ All existing interaction behavior should remain functionally consistent:
 - passage switching still reloads or reuses cached loaded state as it does today
 - harmonic and stage changes still refresh the viewer
 - processing mode changes still trigger the existing mode-switch behavior
-- manual shift and width overrides still validate integer inputs and reload accordingly
+- manual shift, width, and padding factor overrides still validate integer inputs and reload accordingly
 - export still writes the same output set
 
 The redesign should improve clarity, not alter the meaning of the controls.
+
+### Padding Factor Control
+
+The `Tuning` section should expose `Padding Factor` as an editable manual control alongside shift and width.
+
+Requirements:
+
+- `Padding Factor` accepts only positive integers
+- the field displays the current loaded `pad_fact` value from processing settings
+- `Apply` reloads using the current shift, width, and padding factor values together
+- `Reset to Auto` clears manual overrides and restores `Padding Factor` to the default processing value of `1`
+- validation errors for padding factor should use the same dialog and log pattern as the other tuning inputs
+
+This should remain part of the existing tuning workflow rather than becoming a separate processing panel.
 
 ## Error Handling
 
@@ -217,7 +231,7 @@ The GUI should continue to use:
 - `load_passage` for dataset loading
 - `get_view_image` for rendering the selected stage and harmonic
 - `export_all_views` for export
-- the existing cached loaded-state and override structures
+- the existing cached loaded-state and override structures, extended to include `pad_fact`
 
 Only the presentation and grouping of controls should change.
 
@@ -228,6 +242,10 @@ Validation should include:
 - running the existing automated test suite
 - launching the desktop app and checking that the window renders correctly
 - verifying load, passage switch, harmonic switch, stage switch, manual apply/reset, and export
+- verifying that `Padding Factor` shows the loaded `pad_fact` value
+- verifying that invalid or non-positive `Padding Factor` values are rejected
+- verifying that `Apply` passes `Padding Factor` into reloads
+- verifying that `Reset to Auto` restores `Padding Factor` to `1`
 - visually checking both desktop readability and smaller-window behavior
 - confirming that Matplotlib integration still works after layout changes
 
