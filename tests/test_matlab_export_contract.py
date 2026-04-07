@@ -11,7 +11,7 @@ class MatlabExportContractTests(unittest.TestCase):
     def test_matlab_entrypoint_exists_with_expected_signature(self) -> None:
         self.assertTrue(MATLAB_EXPORT_FILE.exists(), "Expected MATLAB export entrypoint to exist.")
         content = MATLAB_EXPORT_FILE.read_text(encoding="utf-8")
-        self.assertIn("function summary = export_two_sideband_holograms(folderPath)", content)
+        self.assertIn("function summary = export_two_sideband_holograms(folderPath, padFact, alphaValue)", content)
         self.assertIn("matlab-two-sideband-export", content)
         self.assertIn("two_sideband", content)
 
@@ -41,6 +41,14 @@ class MatlabExportContractTests(unittest.TestCase):
         self.assertTrue(MATLAB_EXPORT_FILE.exists(), "Expected MATLAB export entrypoint to exist.")
         content = MATLAB_EXPORT_FILE.read_text(encoding="utf-8")
         self.assertIn("findpeaks(", content)
+
+    def test_matlab_entrypoint_uses_one_based_fft_row_coordinates(self) -> None:
+        self.assertTrue(MATLAB_EXPORT_FILE.exists(), "Expected MATLAB export entrypoint to exist.")
+        content = MATLAB_EXPORT_FILE.read_text(encoding="utf-8")
+        self.assertIn("'fft_center_row', floor((size(rawStack, 1) * padFact) / 2) + 1", content)
+        self.assertIn("mirrorRow = nY2 - carrierRow + 1;", content)
+        self.assertNotIn("refine_peak_subpixel(profile, bestPeak - 1)", content)
+        self.assertNotIn("refine_peak_subpixel(profile, idx - 1)", content)
 
     def test_matlab_readme_documents_usage_and_outputs(self) -> None:
         self.assertTrue(MATLAB_README_FILE.exists(), "Expected dedicated MATLAB README to exist.")

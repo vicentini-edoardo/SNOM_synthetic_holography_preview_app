@@ -1,13 +1,17 @@
-function summary = export_two_sideband_holograms(folderPath)
+function summary = export_two_sideband_holograms(folderPath, padFact, alphaValue)
 %EXPORT_TWO_SIDEBAND_HOLOGRAMS Export SNOM holograms as per-harmonic MAT files.
-%   SUMMARY = EXPORT_TWO_SIDEBAND_HOLOGRAMS(FOLDERPATH) loads the forward (O)
-%   and reverse (R-O) harmonic stacks found in FOLDERPATH, applies the same
-%   two-sideband processing workflow used by the Python preview app, and writes
-%   one self-contained MAT file per detected harmonic into:
+%   SUMMARY = EXPORT_TWO_SIDEBAND_HOLOGRAMS(FOLDERPATH) uses PADFACT=1 and
+%   ALPHAVALUE=0.3 by default. SUMMARY =
+%   EXPORT_TWO_SIDEBAND_HOLOGRAMS(FOLDERPATH, PADFACT, ALPHAVALUE) loads the
+%   forward (O) and reverse (R-O) harmonic stacks found in FOLDERPATH, applies
+%   the same two-sideband processing workflow used by the Python preview app,
+%   and writes one self-contained MAT file per detected harmonic into:
 %       <folderPath>/matlab-two-sideband-export
 
     arguments
         folderPath (1, :) char
+        padFact (1, 1) double {mustBeInteger, mustBePositive} = 1
+        alphaValue (1, 1) double {mustBeFinite, mustBeNonnegative, mustBeLessThanOrEqual(alphaValue, 1)} = 0.3
     end
 
     folderPath = char(string(folderPath));
@@ -23,8 +27,6 @@ function summary = export_two_sideband_holograms(folderPath)
         mkdir(outputFolder);
     end
 
-    padFact = 1;
-    alphaValue = 0.3;
     processingMode = 'two_sideband';
     referenceHarmonic = 2;
     passageConfigs = {
@@ -258,7 +260,7 @@ function processed = process_stack(rawStack, availableHarmonics, padFact, alpha,
         'processed_stack', processedStack, ...
         'carrier_row', carrierRow, ...
         'filter_width_y', filterWidthY, ...
-        'fft_center_row', floor((size(rawStack, 1) * padFact) / 2), ...
+        'fft_center_row', floor((size(rawStack, 1) * padFact) / 2) + 1, ...
         'rotation_angle_rad_by_harmonic', rotationAngleRadByHarmonic, ...
         'rotation_angle_deg_by_harmonic', rotationAngleDegByHarmonic, ...
         'mirror_row_by_harmonic', mirrorRowByHarmonic);
@@ -293,10 +295,7 @@ function [imageComplexOut, carrierRow, filterWidthY, diagnostics] = ...
     end
     [carrierRow, filterWidthY] = validate_vertical_filter(nY2, carrierRow, filterWidthY);
 
-    mirrorRow = nY2 - carrierRow;
-    if mirrorRow >= nY2
-        mirrorRow = nY2 - 1;
-    end
+    mirrorRow = nY2 - carrierRow + 1;
 
     sidebandFilterPos = build_sideband_filter(nY2, carrierRow, filterWidthY, alpha);
     sidebandFilterNeg = build_sideband_filter(nY2, mirrorRow, filterWidthY, alpha);
@@ -378,17 +377,17 @@ end
 
 
 function peakIdx = find_vertical_carrier(profile)
-    centerIdx = floor(numel(profile) / 2);
+    centerIdx = floor(numel(profile) / 2) + 1;
     exclusionHalfWidth = max(8, floor(numel(profile) / 32));
     edgeMargin = 2;
-    searchStop = centerIdx - exclusionHalfWidth;
-    if searchStop <= edgeMargin + 1
+    exclusionStart = centerIdx - exclusionHalfWidth;
+    segmentStart = edgeMargin + 1;
+    segmentStop = exclusionStart - edgeMargin - 1;
+    if segmentStop < segmentStart
         error('export_two_sideband_holograms:CarrierDetectionFailed', ...
             'Unable to search for a carrier away from the zero order.');
     end
 
-    segmentStart = edgeMargin + 1;
-    segmentStop = searchStop - edgeMargin;
     searchSegment = profile(segmentStart:segmentStop);
     minPeakDistance = max(4, floor(numel(profile) / 64));
     minPeakProminence = max(std(profile) * 0.25, 1e-6);
@@ -402,26 +401,25 @@ function peakIdx = find_vertical_carrier(profile)
         candidateRows = peakLocs + segmentStart - 1;
         [~, bestIdx] = max(peakProminences .* peakValues);
         bestPeak = candidateRows(bestIdx);
-        peakIdx = refine_peak_subpixel(profile, bestPeak - 1);
+        peakIdx = refine_peak_subpixel(profile, bestPeak);
         return;
     end
 
     searchProfile = profile;
     searchProfile(1:edgeMargin) = -inf;
-    searchProfile(searchStop:end) = -inf;
+    searchProfile(exclusionStart:end) = -inf;
     [peakValue, idx] = max(searchProfile);
     if ~isfinite(peakValue)
         error('export_two_sideband_holograms:CarrierDetectionFailed', ...
             'Unable to find a valid vertical carrier away from the zero order.');
     end
-    peakIdx = refine_peak_subpixel(profile, idx - 1);
+    peakIdx = refine_peak_subpixel(profile, idx);
 end
 
 
-function refinedIndex = refine_peak_subpixel(profile, peakIdxZeroBased)
-    peakIndexOneBased = peakIdxZeroBased + 1;
+function refinedIndex = refine_peak_subpixel(profile, peakIndexOneBased)
     if peakIndexOneBased <= 1 || peakIndexOneBased >= numel(profile)
-        refinedIndex = double(peakIdxZeroBased);
+        refinedIndex = double(peakIndexOneBased);
         return;
     end
 
@@ -430,20 +428,20 @@ function refinedIndex = refine_peak_subpixel(profile, peakIdxZeroBased)
     right = profile(peakIndexOneBased + 1);
     denominator = left - 2 .* center + right;
     if abs(denominator) < 1e-12
-        refinedIndex = double(peakIdxZeroBased);
+        refinedIndex = double(peakIndexOneBased);
         return;
     end
 
     offset = 0.5 .* (left - right) ./ denominator;
     offset = min(max(offset, -0.5), 0.5);
-    refinedIndex = double(peakIdxZeroBased) + offset;
+    refinedIndex = double(peakIndexOneBased) + offset;
 end
 
 
 function width = estimate_filter_width(profile, carrierRow)
-    centerIdx = floor(numel(profile) / 2);
+    centerIdx = floor(numel(profile) / 2) + 1;
     distanceToZeroOrder = abs(carrierRow - centerIdx);
-    distanceToEdge = min(carrierRow, numel(profile) - carrierRow - 1);
+    distanceToEdge = min(carrierRow - 1, numel(profile) - carrierRow);
     width = floor(min(distanceToZeroOrder, distanceToEdge));
     if width < 2
         error('export_two_sideband_holograms:FilterWidthFailed', ...
@@ -453,20 +451,20 @@ end
 
 
 function [carrierRow, width] = validate_vertical_filter(lengthY, carrierRow, filterWidthY)
-    centerIdx = floor(lengthY / 2);
+    centerIdx = floor(lengthY / 2) + 1;
     exclusionHalfWidth = max(8, floor(lengthY / 32));
     if carrierRow >= centerIdx - exclusionHalfWidth
         error('export_two_sideband_holograms:InvalidCarrierRow', ...
             'Carrier center must stay above the zero-order exclusion band.');
     end
-    if carrierRow < 1 || carrierRow >= lengthY - 1
+    if carrierRow <= 1 || carrierRow >= lengthY
         error('export_two_sideband_holograms:InvalidCarrierRow', ...
             'Carrier center must stay inside the Fourier-space image bounds.');
     end
 
     width = normalize_filter_width(filterWidthY, lengthY);
     [~, stopIdx] = band_bounds(carrierRow, width, lengthY);
-    if stopIdx >= centerIdx - exclusionHalfWidth + 1
+    if stopIdx >= centerIdx - exclusionHalfWidth
         error('export_two_sideband_holograms:InvalidFilterWidth', ...
             'Filter width reaches the zero order; reduce the width or move the center upward.');
     end
@@ -485,18 +483,18 @@ end
 function [startIdx, stopIdx] = band_bounds(centerRow, width, lengthY)
     width = normalize_filter_width(width, lengthY);
     startIdx = centerRow - floor(width / 2);
-    stopIdx = startIdx + width;
-    if startIdx < 0
-        stopIdx = stopIdx - startIdx;
-        startIdx = 0;
+    stopIdx = startIdx + width - 1;
+    if startIdx < 1
+        stopIdx = stopIdx + (1 - startIdx);
+        startIdx = 1;
     end
     if stopIdx > lengthY
         startIdx = startIdx - (stopIdx - lengthY);
         stopIdx = lengthY;
     end
-    startIdx = max(0, startIdx);
+    startIdx = max(1, startIdx);
     stopIdx = min(lengthY, stopIdx);
-    if stopIdx - startIdx < 2
+    if stopIdx - startIdx + 1 < 2
         error('export_two_sideband_holograms:InvalidFilterWidth', ...
             'Vertical filter band is too narrow after clamping.');
     end
@@ -506,22 +504,22 @@ end
 function filterWindow = build_sideband_filter(lengthY, centerRow, filterWidthY, alpha)
     [startIdx, stopIdx] = band_bounds(centerRow, filterWidthY, lengthY);
     filterWindow = zeros(lengthY, 1);
-    filterWindow((startIdx + 1):stopIdx) = tukey_window(stopIdx - startIdx, alpha);
+    filterWindow(startIdx:stopIdx) = tukey_window(stopIdx - startIdx + 1, alpha);
 end
 
 
 function shifted = shift_band_to_center(filteredFt, sourceCenterRow)
     lengthY = size(filteredFt, 1);
-    targetCenterRow = floor(lengthY / 2);
+    targetCenterRow = floor(lengthY / 2) + 1;
     shiftValue = targetCenterRow - sourceCenterRow;
     shifted = zeros(size(filteredFt));
 
-    srcStart = max(0, -shiftValue);
+    srcStart = max(1, 1 - shiftValue);
     srcStop = min(lengthY, lengthY - shiftValue);
-    dstStart = max(0, shiftValue);
+    dstStart = max(1, 1 + shiftValue);
     dstStop = min(lengthY, lengthY + shiftValue);
 
-    shifted((dstStart + 1):dstStop, :) = filteredFt((srcStart + 1):srcStop, :);
+    shifted(dstStart:dstStop, :) = filteredFt(srcStart:srcStop, :);
 end
 
 

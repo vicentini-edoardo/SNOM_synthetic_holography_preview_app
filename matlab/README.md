@@ -8,6 +8,17 @@ The public entrypoint is:
 summary = export_two_sideband_holograms(folderPath)
 ```
 
+Optional processing inputs are also supported:
+
+```matlab
+summary = export_two_sideband_holograms(folderPath, padFact, alphaValue)
+```
+
+Defaults:
+
+- `padFact = 1`
+- `alphaValue = 0.3`
+
 The function scans one SNOM dataset folder, detects the available harmonic pairs for the forward `O` and reverse `R-O` passages, processes every detected harmonic `0..5`, and writes one `.mat` file per harmonic into:
 
 ```text
@@ -42,6 +53,7 @@ From MATLAB, either change into this `matlab/` folder or add it to the MATLAB pa
 ```matlab
 folderPath = '/path/to/2026-03-24 171434 AFM 2.52THz_B';
 summary = export_two_sideband_holograms(folderPath);
+summary_custom = export_two_sideband_holograms(folderPath, 1, 0.3);
 ```
 
 ## MATLAB Requirements
