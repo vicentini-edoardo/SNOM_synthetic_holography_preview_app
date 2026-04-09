@@ -6,6 +6,8 @@ imported directly in scripts and notebooks.
 
 from __future__ import annotations
 
+import warnings
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -24,8 +26,69 @@ class ProcessingError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class VerticalCropBounds:
+    start_y: int
+    stop_y: int
+
+
+@dataclass(frozen=True)
+class HologramGeometry:
+    pad_fact: int
+    fft_height: int
+    image_width: int
+    crop_y: VerticalCropBounds
+    carrier_row: int
+    mirror_row: int | None
+    filter_width_y: int
+    fft_center_row: int
+
+    @property
+    def fft_shape(self) -> tuple[int, int]:
+        return (self.fft_height, self.image_width)
+
+
+@dataclass(frozen=True)
+class FourierAnalysis:
+    signal_padded: np.ndarray
+    signal_ft: np.ndarray
+    magnitude_ft: np.ndarray
+    vertical_profile: np.ndarray
+
+
+@dataclass(frozen=True)
+class HologramViewStages:
+    raw: np.ndarray
+    processed: np.ndarray
+    mag_signal_ft: np.ndarray
+    filtered_shift: np.ndarray
+
+
+@dataclass(frozen=True)
+class HologramReconstruction:
+    processing_mode: str
+    rotation_angle_rad: float
+    geometry: HologramGeometry
+    analysis: FourierAnalysis
+    processed_full: np.ndarray
+    processed_cropped: np.ndarray
+    filtered_shift: np.ndarray
+    view_stages: HologramViewStages
+
+    @property
+    def diagnostics(self) -> dict[str, float | int]:
+        mirror_row = -1 if self.geometry.mirror_row is None else int(self.geometry.mirror_row)
+        return {
+            "rotation_angle_rad": self.rotation_angle_rad,
+            "rotation_angle_deg": float(np.degrees(self.rotation_angle_rad))
+            if np.isfinite(self.rotation_angle_rad)
+            else float("nan"),
+            "mirror_row": mirror_row,
+        }
+
+
 def tukey_filter_func(width: int, length: int, alpha: float) -> np.ndarray:
-    width = max(2, min(int(width), length))
+    width = max(2, min(int(round(width)), length))
     if width % 2 == 1:
         width += 1
     width = min(width, length)
@@ -90,12 +153,15 @@ def _find_vertical_carrier(profile: np.ndarray) -> float:
 
 def _estimate_filter_width(profile: np.ndarray, carrier_row: float) -> int:
     center_idx = profile.size // 2
-    distance_to_zero_order = abs(carrier_row - center_idx)
     carrier_row_int = int(round(carrier_row))
+    distance_to_zero_order = abs(carrier_row_int - center_idx)
     distance_to_edge = min(carrier_row_int, profile.size - carrier_row_int - 1)
-    width = int(min(distance_to_zero_order, distance_to_edge))
+    second_order_cap = carrier_row_int - abs(center_idx - 2 * carrier_row_int)
+    width = int(min(distance_to_zero_order, distance_to_edge, second_order_cap))
     if width < 2:
-        raise ProcessingError("Detected carrier is too close to the zero order to build a stable filter.")
+        raise ProcessingError(
+            "Detected carrier is too close to the edge or zero order to build a stable filter without second-order aliasing."
+        )
     return width
 
 
@@ -113,7 +179,9 @@ def measure_profile_width(profile: np.ndarray, row_idx: int) -> float:
         peak_candidates = peaks + start
         local_idx = int(min(peak_candidates, key=lambda idx: abs(idx - row_idx)))
 
-    width = float(signal.peak_widths(profile, [local_idx], rel_height=0.5)[0][0])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        width = float(signal.peak_widths(profile, [local_idx], rel_height=0.5)[0][0])
     if width <= 0:
         threshold = 0.5 * profile[local_idx]
         above = np.flatnonzero(profile >= threshold)
@@ -148,42 +216,6 @@ def _band_bounds(center_row: int, width: int, length: int) -> tuple[int, int]:
     return start, stop
 
 
-def _validate_vertical_filter(length: int, center_row: int, filter_width_y: int) -> tuple[int, int]:
-    center_idx = length // 2
-    exclusion_half_width = max(8, length // 32)
-    if center_row >= center_idx - exclusion_half_width:
-        raise ProcessingError("Carrier center must stay above the zero-order exclusion band.")
-    if center_row < 1 or center_row >= length - 1:
-        raise ProcessingError("Carrier center must stay inside the Fourier-space image bounds.")
-
-    width = _normalize_filter_width(filter_width_y, length)
-    start, stop = _band_bounds(center_row, width, length)
-    if stop >= center_idx - exclusion_half_width + 1:
-        raise ProcessingError("Filter width reaches the zero order; reduce the width or move the center upward.")
-    return center_row, width
-
-
-def _build_sideband_filter(length: int, center_row: int, filter_width_y: int, alpha: float) -> np.ndarray:
-    start, stop = _band_bounds(center_row, filter_width_y, length)
-    filter_window = np.zeros(length)
-    filter_window[start:stop] = signal.windows.tukey(stop - start, alpha)
-    return filter_window
-
-
-def _shift_band_to_center(filtered_ft: np.ndarray, source_center_row: int) -> np.ndarray:
-    length = filtered_ft.shape[0]
-    target_center_row = length // 2
-    shift = target_center_row - source_center_row
-    shifted = np.zeros_like(filtered_ft)
-
-    src_start = max(0, -shift)
-    src_stop = min(length, length - shift)
-    dst_start = max(0, shift)
-    dst_stop = min(length, length + shift)
-    shifted[dst_start:dst_stop, :] = filtered_ft[src_start:src_stop, :]
-    return shifted
-
-
 def _data_angle(x: np.ndarray, y: np.ndarray | None = None) -> float:
     if y is None:
         xx = np.real(x).ravel()
@@ -215,80 +247,213 @@ def _rotate_to_real_axis(image_complex_in_2d: np.ndarray) -> tuple[np.ndarray, f
     return rotated, angle
 
 
-def open_hologram_2d(
-    image_complex_in_2d: np.ndarray,
-    pad_fact: int = 1,
-    alpha: float = 0.3,
-    carrier_row: int | None = None,
-    filter_width_y: int | None = 0,
-    processing_mode: str = "two_sideband",
-) -> tuple[dict[str, np.ndarray], int, int, dict[str, float | int]]:
+def prepare_signal_for_mode(image_complex_in_2d: np.ndarray, processing_mode: str) -> tuple[np.ndarray, float]:
     if processing_mode not in PROCESSING_MODES:
         raise ProcessingError(f"Unknown processing mode: {processing_mode}")
 
-    rotation_angle = float("nan")
     if processing_mode == "two_sideband":
         rotated_complex, rotation_angle = _rotate_to_real_axis(image_complex_in_2d)
-        signal_in = np.real(rotated_complex)
-        signal_dtype = float
-    else:
-        signal_in = image_complex_in_2d
-        signal_dtype = complex
+        return np.real(rotated_complex), rotation_angle
 
-    n_x, n_y = signal_in.shape[1], signal_in.shape[0]
+    return image_complex_in_2d, float("nan")
 
-    n_x2, n_y2 = n_x, n_y * pad_fact
-    signal_pad = np.zeros((n_y2, n_x2), dtype=signal_dtype)
-    start_y, start_x = (n_y2 - n_y) // 2, (n_x2 - n_x) // 2
-    signal_pad[start_y : start_y + n_y, start_x : start_x + n_x] = signal_in
+
+def pad_vertical_and_fft(signal_in: np.ndarray, pad_fact: int) -> tuple[FourierAnalysis, VerticalCropBounds]:
+    if pad_fact <= 0:
+        raise ProcessingError("Padding factor must be a positive integer.")
+
+    n_y, image_width = signal_in.shape
+    fft_height = n_y * pad_fact
+    signal_pad = np.zeros((fft_height, image_width), dtype=signal_in.dtype)
+    start_y = (fft_height - n_y) // 2
+    stop_y = start_y + n_y
+    signal_pad[start_y:stop_y, :] = signal_in
 
     signal_ft = fftshift(fft2(signal_pad))
-    mag_signal_ft = np.abs(signal_ft)
-    vertical_profile = build_vertical_profile(mag_signal_ft)
+    magnitude_ft = np.abs(signal_ft)
+    vertical_profile = build_vertical_profile(magnitude_ft)
+    analysis = FourierAnalysis(
+        signal_padded=signal_pad,
+        signal_ft=signal_ft,
+        magnitude_ft=magnitude_ft,
+        vertical_profile=vertical_profile,
+    )
+    return analysis, VerticalCropBounds(start_y=start_y, stop_y=stop_y)
 
-    if carrier_row is None:
-        carrier_row = int(round(_find_vertical_carrier(vertical_profile)))
-    if filter_width_y is None or filter_width_y <= 0:
-        filter_width_y = _estimate_filter_width(vertical_profile, carrier_row)
-    carrier_row, filter_width_y = _validate_vertical_filter(n_y2, int(round(carrier_row)), filter_width_y)
+
+def resolve_filter_geometry(
+    vertical_profile: np.ndarray,
+    pad_fact: int,
+    fft_height: int,
+    image_width: int,
+    crop_y: VerticalCropBounds,
+    carrier_row_override: int | None = None,
+    filter_width_override: int | None = None,
+    processing_mode: str = "two_sideband",
+) -> HologramGeometry:
+    fft_center_row = fft_height // 2
+
+    carrier_row = int(round(_find_vertical_carrier(vertical_profile))) if carrier_row_override is None else int(
+        round(carrier_row_override)
+    )
+    filter_width_y = (
+        _estimate_filter_width(vertical_profile, carrier_row)
+        if filter_width_override is None or filter_width_override <= 0
+        else int(round(filter_width_override))
+    )
+    filter_width_y = _normalize_filter_width(filter_width_y, fft_height)
+
+    exclusion_half_width = max(8, fft_height // 32)
+    if carrier_row >= fft_center_row - exclusion_half_width:
+        raise ProcessingError("Carrier center must stay above the zero-order exclusion band.")
+    if carrier_row < 1 or carrier_row >= fft_height - 1:
+        raise ProcessingError("Carrier center must stay inside the Fourier-space image bounds.")
+
+    start, stop = _band_bounds(carrier_row, filter_width_y, fft_height)
+
+    mirror_row = None
+    if processing_mode == "two_sideband":
+        mirror_row = 2 * fft_center_row - carrier_row
+        if mirror_row < 1 or mirror_row >= fft_height - 1:
+            raise ProcessingError("Mirrored carrier falls outside the Fourier-space image bounds.")
+
+    return HologramGeometry(
+        pad_fact=pad_fact,
+        fft_height=fft_height,
+        image_width=image_width,
+        crop_y=crop_y,
+        carrier_row=carrier_row,
+        mirror_row=mirror_row,
+        filter_width_y=filter_width_y,
+        fft_center_row=fft_center_row,
+    )
+
+
+def analyze_vertical_spectrum(
+    analysis: FourierAnalysis,
+    pad_fact: int,
+    crop_y: VerticalCropBounds,
+    carrier_row_override: int | None = None,
+    filter_width_override: int | None = None,
+    processing_mode: str = "two_sideband",
+) -> HologramGeometry:
+    return resolve_filter_geometry(
+        analysis.vertical_profile,
+        pad_fact=pad_fact,
+        fft_height=analysis.signal_ft.shape[0],
+        image_width=analysis.signal_ft.shape[1],
+        crop_y=crop_y,
+        carrier_row_override=carrier_row_override,
+        filter_width_override=filter_width_override,
+        processing_mode=processing_mode,
+    )
+
+
+def _build_band_mask(length: int, center_row: int, filter_width_y: int, alpha: float) -> np.ndarray:
+    start, stop = _band_bounds(center_row, filter_width_y, length)
+    filter_window = np.zeros(length)
+    filter_window[start:stop] = signal.windows.tukey(stop - start, alpha)
+    return filter_window[:, np.newaxis]
+
+
+def _shift_rows_to_center(filtered_ft: np.ndarray, source_center_row: int, target_center_row: int) -> np.ndarray:
+    length = filtered_ft.shape[0]
+    shift = target_center_row - source_center_row
+    shifted = np.zeros_like(filtered_ft)
+
+    src_start = max(0, -shift)
+    src_stop = min(length, length - shift)
+    dst_start = max(0, shift)
+    dst_stop = min(length, length + shift)
+    shifted[dst_start:dst_stop, :] = filtered_ft[src_start:src_stop, :]
+    return shifted
+
+
+def reconstruct_from_sidebands(
+    analysis: FourierAnalysis,
+    geometry: HologramGeometry,
+    processing_mode: str,
+    alpha: float,
+    rotation_angle_rad: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    fft_height = geometry.fft_height
+    fft_center_row = geometry.fft_center_row
+    crop_y = geometry.crop_y
+
+    positive_mask = _build_band_mask(fft_height, geometry.carrier_row, geometry.filter_width_y, alpha)
+    filtered_positive = analysis.signal_ft * positive_mask
+    centered_positive = _shift_rows_to_center(filtered_positive, geometry.carrier_row, fft_center_row)
 
     if processing_mode == "two_sideband":
-        mirror_row = n_y2 - carrier_row
-        if mirror_row >= n_y2:
-            mirror_row = n_y2 - 1
+        if geometry.mirror_row is None:
+            raise ProcessingError("Two-sideband processing requires a mirrored carrier row.")
+        negative_mask = _build_band_mask(fft_height, geometry.mirror_row, geometry.filter_width_y, alpha)
+        filtered_negative = analysis.signal_ft * negative_mask
+        centered_negative = _shift_rows_to_center(filtered_negative, geometry.mirror_row, fft_center_row)
 
-        sideband_filter_pos = _build_sideband_filter(n_y2, carrier_row, filter_width_y, alpha)[:, np.newaxis]
-        sideband_filter_neg = _build_sideband_filter(n_y2, mirror_row, filter_width_y, alpha)[:, np.newaxis]
-        filtered_pos = signal_ft * sideband_filter_pos
-        filtered_neg = signal_ft * sideband_filter_neg
-        shifted_pos = _shift_band_to_center(filtered_pos, carrier_row)
-        shifted_neg = _shift_band_to_center(filtered_neg, mirror_row)
-
-        field_pos_full = ifft2(ifftshift(shifted_pos))
-        field_neg_full = ifft2(ifftshift(shifted_neg))
-        filtered_full_rotated = 0.5 * (np.conj(field_pos_full) + field_neg_full)
-        filtered_full = filtered_full_rotated * np.exp(1j * rotation_angle)
-        filtered_shift = fftshift(fft2(filtered_full))
-        filtered = filtered_full
+        field_positive = ifft2(ifftshift(centered_positive))
+        field_negative = ifft2(ifftshift(centered_negative))
+        processed_full_rotated = 0.5 * (np.conj(field_positive) + field_negative)
+        processed_full = processed_full_rotated * np.exp(1j * rotation_angle_rad)
+        filtered_shift = fftshift(fft2(processed_full))
     else:
-        sideband_filter = _build_sideband_filter(n_y2, carrier_row, filter_width_y, alpha)[:, np.newaxis]
-        filtered_sideband = signal_ft * sideband_filter
-        filtered_shift = _shift_band_to_center(filtered_sideband, carrier_row)
-        filtered = ifft2(ifftshift(filtered_shift))
-        mirror_row = -1
+        processed_full = ifft2(ifftshift(centered_positive))
+        filtered_shift = centered_positive
 
-    image_complex_out = filtered[start_y : start_y + n_y, start_x : start_x + n_x]
-    stage_images = {
-        "processed": image_complex_out,
-        "mag_signal_ft": mag_signal_ft,
-        "filtered_shift": filtered_shift,
-    }
-    diagnostics = {
-        "rotation_angle_rad": rotation_angle,
-        "rotation_angle_deg": float(np.degrees(rotation_angle)) if np.isfinite(rotation_angle) else float("nan"),
-        "mirror_row": int(mirror_row),
-    }
-    return stage_images, carrier_row, filter_width_y, diagnostics
+    processed_cropped = processed_full[crop_y.start_y : crop_y.stop_y, :]
+    return processed_full, processed_cropped, filtered_shift
+
+
+def build_view_stages(raw_image: np.ndarray, reconstruction: HologramReconstruction) -> HologramViewStages:
+    return HologramViewStages(
+        raw=raw_image,
+        processed=reconstruction.processed_cropped,
+        mag_signal_ft=reconstruction.analysis.magnitude_ft,
+        filtered_shift=reconstruction.filtered_shift,
+    )
+
+
+def reconstruct_hologram(
+    image_complex_in_2d: np.ndarray,
+    pad_fact: int = 4,
+    alpha: float = 0.3,
+    carrier_row: int | None = None,
+    filter_width_y: int | None = None,
+    processing_mode: str = "two_sideband",
+) -> HologramReconstruction:
+    signal_in, rotation_angle_rad = prepare_signal_for_mode(image_complex_in_2d, processing_mode)
+    analysis, crop_y = pad_vertical_and_fft(signal_in, pad_fact)
+    geometry = analyze_vertical_spectrum(
+        analysis,
+        pad_fact=pad_fact,
+        crop_y=crop_y,
+        carrier_row_override=carrier_row,
+        filter_width_override=filter_width_y,
+        processing_mode=processing_mode,
+    )
+    processed_full, processed_cropped, filtered_shift = reconstruct_from_sidebands(
+        analysis,
+        geometry,
+        processing_mode=processing_mode,
+        alpha=alpha,
+        rotation_angle_rad=rotation_angle_rad,
+    )
+    reconstruction = HologramReconstruction(
+        processing_mode=processing_mode,
+        rotation_angle_rad=rotation_angle_rad,
+        geometry=geometry,
+        analysis=analysis,
+        processed_full=processed_full,
+        processed_cropped=processed_cropped,
+        filtered_shift=filtered_shift,
+        view_stages=HologramViewStages(
+            raw=image_complex_in_2d,
+            processed=processed_cropped,
+            mag_signal_ft=analysis.magnitude_ft,
+            filtered_shift=filtered_shift,
+        ),
+    )
+    return reconstruction
 
 
 def correct_baseline_slope(z_values: np.ndarray) -> np.ndarray:

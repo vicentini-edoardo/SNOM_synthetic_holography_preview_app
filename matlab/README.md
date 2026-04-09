@@ -11,13 +11,26 @@ summary = export_two_sideband_holograms(folderPath)
 Optional processing inputs are also supported:
 
 ```matlab
-summary = export_two_sideband_holograms(folderPath, padFact, alphaValue)
+summary = export_two_sideband_holograms(folderPath, 'padFact', 4, 'alphaValue', 0.3)
+summary = export_two_sideband_holograms(folderPath, ...
+    'padFact', 4, ...
+    'alphaValue', 0.3, ...
+    'carrierRow', 120, ...
+    'filterWidthY', 250)
 ```
 
 Defaults:
 
-- `padFact = 1`
+- `padFact = 4`
 - `alphaValue = 0.3`
+- `carrierRow = []` for automatic carrier detection
+- `filterWidthY = []` for automatic width detection
+
+Legacy positional inputs are still accepted for compatibility:
+
+```matlab
+summary = export_two_sideband_holograms(folderPath, 4, 0.3)
+```
 
 The function scans one SNOM dataset folder, detects the available harmonic pairs for the forward `O` and reverse `R-O` passages, processes every detected harmonic `0..5`, and writes one `.mat` file per harmonic into:
 
@@ -53,12 +66,16 @@ From MATLAB, either change into this `matlab/` folder or add it to the MATLAB pa
 ```matlab
 folderPath = '/path/to/2026-03-24 171434 AFM 2.52THz_B';
 summary = export_two_sideband_holograms(folderPath);
-summary_custom = export_two_sideband_holograms(folderPath, 1, 0.3);
+summary_custom = export_two_sideband_holograms(folderPath, ...
+    'padFact', 4, ...
+    'alphaValue', 0.3, ...
+    'carrierRow', 120, ...
+    'filterWidthY', 250);
 ```
 
 ## MATLAB Requirements
 
-- MATLAB with support for local functions in script files
+- MATLAB R2017a+
 - Signal Processing Toolbox, because the vertical FFT carrier detection uses `findpeaks`
 
 `summary` is a struct array with one element per exported passage. Each element reports:
@@ -109,8 +126,11 @@ Behavior that intentionally matches the Python app:
 
 - only two-sideband processing is implemented
 - harmonic 2 is the reference harmonic used for automatic carrier detection and filter-width estimation
-- the detected `carrier_row` and `filter_width_y` from harmonic 2 are reused for all other harmonics in the same passage
+- when `carrierRow` and `filterWidthY` are not provided, the detected `carrier_row` and `filter_width_y` from harmonic 2 are reused for all other harmonics in the same passage
+- when `carrierRow` and/or `filterWidthY` are provided, those manual values are applied to the reference harmonic and then reused for all other harmonics in the same passage
 - each harmonic still stores its own `mirror_row` and rotation-angle diagnostics
+- manual `filterWidthY` is only limited by the FFT/image height normalization; it may overlap the zero order or other bands by user choice
+- manual `carrierRow` is only constrained by Fourier-space image bounds needed for valid indexing
 
 ## Failure Cases
 
@@ -120,6 +140,7 @@ The function raises an error when:
 - a passage contains an incomplete amplitude/phase pair for any harmonic
 - a detected passage is missing harmonic 2
 - `.gsf` headers do not contain the expected dimension metadata
-- the detected sideband is too close to the zero order to build a stable filter
+- automatic detection cannot find a usable sideband away from the zero order
+- a manual or automatic `carrierRow` falls outside the Fourier-space image bounds
 
 If a passage is completely absent, it is skipped without error.

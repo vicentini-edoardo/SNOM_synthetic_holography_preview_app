@@ -50,12 +50,20 @@ python3 main.py
 python3 main.py "/path/to/data/folder"
 ```
 
+## Citation
+
+If you use this software in academic work, please cite it as:
+
+```text
+Vicentini, E. (2026). SNOM synthetic holography preview app [Computer software]. GitHub. https://github.com/vicentini-edoardo/SNOM_synthetic_holography_preview_app
+```
+
 ## Jupyter Notebooks
 
-Two example notebooks are included under [output/jupyter-notebook](/Users/edoardolab/Documents/GitHub/SNOM_synthetic_holography_preview_app/output/jupyter-notebook):
+Two example notebooks are included under [`output/jupyter-notebook`](./output/jupyter-notebook):
 
-- [simple-two-sideband-processing-example.ipynb](/Users/edoardolab/Documents/GitHub/SNOM_synthetic_holography_preview_app/output/jupyter-notebook/simple-two-sideband-processing-example.ipynb): minimal real-data workflow with folder path, passage, and harmonic selection, then raw/processed amplitude and phase output using two-sideband processing only.
-- [standalone-hologram-opening-example.ipynb](/Users/edoardolab/Documents/GitHub/SNOM_synthetic_holography_preview_app/output/jupyter-notebook/standalone-hologram-opening-example.ipynb): more detailed standalone example showing direct use of `hologram_opening.py` on either measured data or a synthetic hologram, including intermediate returned stages.
+- [`simple-two-sideband-processing-example.ipynb`](./output/jupyter-notebook/simple-two-sideband-processing-example.ipynb): app-facing example that uses `processing.load_passage(...)` and `processing.get_view_image(...)` to load a dataset folder, select a passage/harmonic, optionally override the filter vertical center and width, and inspect raw, processed, Fourier-magnitude, and filtered-shift views for two-sideband processing.
+- [`standalone-hologram-opening-example.ipynb`](./output/jupyter-notebook/standalone-hologram-opening-example.ipynb): lower-level example that calls `hologram_opening.reconstruct_hologram(...)` directly in one-sideband and two-sideband modes. It can run either on a measured dataset or on the built-in synthetic fallback, and also exposes manual filter-center and filter-width overrides.
 
 Launch Jupyter from the repository root:
 
@@ -64,7 +72,7 @@ python3 -m jupyter lab output/jupyter-notebook/simple-two-sideband-processing-ex
 python3 -m jupyter lab output/jupyter-notebook/standalone-hologram-opening-example.ipynb
 ```
 
-Both notebooks assume Jupyter was started from the repository root so local imports like `hologram_opening` and `processing` resolve correctly.
+Both notebooks assume Jupyter was started from the repository root so local imports like `hologram_opening` and `processing` resolve correctly. The simple notebook expects a real dataset folder, while the standalone notebook can be executed immediately with the synthetic example by leaving `folder_path = ""`. In both notebooks, leaving the override fields as `None` keeps the automatic carrier-center and filter-width detection.
 
 ## Expected Data Layout
 

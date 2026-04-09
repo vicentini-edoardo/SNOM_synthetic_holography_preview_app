@@ -1,21 +1,19 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 import numpy as np
 from matplotlib.figure import Figure
-from scipy.linalg import lstsq
 
 from hologram_opening import (
-    build_vertical_profile,
     PROCESSING_MODES,
     ProcessingError,
-    correct_baseline_slope,
+    build_vertical_profile,
     measure_profile_width,
-    open_hologram_2d,
     processed_phase,
+    reconstruct_hologram,
 )
 
 
@@ -24,7 +22,7 @@ PASSAGE_TO_KEYS = {
     "reverse": {"z": "R-Z", "o": "R-O", "m": "R-M", "label": "Reverse (R-O)"},
 }
 
-EXPORT_HARMONICS = (1, 2, 3, 4, 5)
+EXPORT_HARMONICS = (0, 1, 2, 3, 4, 5)
 STAGE_LABELS = {
     "raw": "Raw",
     "processed": "Processed",
@@ -44,6 +42,7 @@ class LoadedData:
     m: np.ndarray | None
     stage_stacks: dict[str, np.ndarray]
     processing_settings: dict[str, Any]
+    processing_diagnostics: dict[str, Any]
     cache_path: str
     metadata: dict[str, Any]
 
@@ -158,7 +157,7 @@ def validate_passage_data(data: dict[str, np.ndarray], passage: str) -> dict[str
     if o.shape[2] < required_count:
         raise ProcessingError(
             f"Selected passage '{keys['label']}' has {o.shape[2]} harmonics in cache, "
-            f"but export/view requires indices 1..5."
+            f"but export/view requires indices 0..5."
         )
 
     missing_harmonics = [harmonic for harmonic in EXPORT_HARMONICS if not _harmonic_is_present(o, harmonic)]
@@ -170,9 +169,32 @@ def validate_passage_data(data: dict[str, np.ndarray], passage: str) -> dict[str
     return keys
 
 
+def _empty_stage_stack(reference_image: np.ndarray, harmonic_count: int) -> np.ndarray:
+    return np.full(
+        (reference_image.shape[0], reference_image.shape[1], harmonic_count),
+        np.nan + 1j * np.nan,
+        dtype=complex,
+    )
+
+
+def _result_stage_map(result: Any) -> dict[str, np.ndarray]:
+    return {
+        "processed": result.view_stages.processed,
+        "mag_signal_ft": result.view_stages.mag_signal_ft,
+        "filtered_shift": result.view_stages.filtered_shift,
+    }
+
+
+def _result_diagnostics(result: Any) -> dict[str, float | int]:
+    diagnostics = result.diagnostics
+    diagnostics["carrier_row"] = int(result.geometry.carrier_row)
+    diagnostics["filter_width_y"] = int(result.geometry.filter_width_y)
+    return diagnostics
+
+
 def process_stack(
     raw_stack: np.ndarray,
-    pad_fact: int = 1,
+    pad_fact: int = 4,
     alpha: float = 0.3,
     carrier_row_override: int | None = None,
     filter_width_override: int | None = None,
@@ -184,62 +206,55 @@ def process_stack(
         raise ProcessingError(f"Unknown processing mode: {processing_mode}")
 
     reference_harmonic = 2
-    fft_center_row = (raw_stack.shape[0] * pad_fact) // 2
     if raw_stack.shape[2] <= reference_harmonic:
         raise ProcessingError("The raw stack does not contain harmonic index 2 required for hologram opening.")
     if not _harmonic_is_present(raw_stack, reference_harmonic):
         raise ProcessingError("The raw stack is missing harmonic index 2 required for hologram opening.")
 
-    auto_reference_stages, auto_center_row, auto_filter_width_y, auto_reference_diagnostics = open_hologram_2d(
-        raw_stack[:, :, reference_harmonic], pad_fact, alpha, processing_mode=processing_mode
+    auto_result = reconstruct_hologram(
+        raw_stack[:, :, reference_harmonic],
+        pad_fact=pad_fact,
+        alpha=alpha,
+        processing_mode=processing_mode,
     )
-    auto_mag_signal_ft = auto_reference_stages["mag_signal_ft"]
-    auto_vertical_profile = build_vertical_profile(auto_mag_signal_ft)
-    zero_order_width_y = measure_profile_width(auto_vertical_profile, fft_center_row)
-    first_order_width_y = measure_profile_width(auto_vertical_profile, auto_center_row)
-    current_center_row = auto_center_row if carrier_row_override is None else int(round(carrier_row_override))
+    auto_geometry = auto_result.geometry
+    auto_vertical_profile = auto_result.analysis.vertical_profile
+    zero_order_width_y = measure_profile_width(auto_vertical_profile, auto_geometry.fft_center_row)
+    first_order_width_y = measure_profile_width(auto_vertical_profile, auto_geometry.carrier_row)
+
+    current_center_row = auto_geometry.carrier_row if carrier_row_override is None else int(round(carrier_row_override))
     current_filter_width_y = (
-        auto_filter_width_y if filter_width_override is None else int(round(filter_width_override))
+        auto_geometry.filter_width_y if filter_width_override is None else int(round(filter_width_override))
     )
     is_manual = carrier_row_override is not None or filter_width_override is not None
 
+    reference_result = auto_result
     if is_manual:
-        reference_stages, current_center_row, current_filter_width_y, reference_diagnostics = open_hologram_2d(
+        reference_result = reconstruct_hologram(
             raw_stack[:, :, reference_harmonic],
-            pad_fact,
-            alpha,
+            pad_fact=pad_fact,
+            alpha=alpha,
             carrier_row=current_center_row,
             filter_width_y=current_filter_width_y,
             processing_mode=processing_mode,
         )
-    else:
-        reference_stages = auto_reference_stages
-        reference_diagnostics = auto_reference_diagnostics
+        current_center_row = reference_result.geometry.carrier_row
+        current_filter_width_y = reference_result.geometry.filter_width_y
 
+    harmonic_count = raw_stack.shape[2]
     stage_stacks = {"raw": raw_stack.copy()}
-    for stage_name, reference_image in reference_stages.items():
-        stage_stacks[stage_name] = np.full(
-            (reference_image.shape[0], reference_image.shape[1], raw_stack.shape[2]),
-            np.nan + 1j * np.nan,
-            dtype=complex,
-        )
+    for stage_name, reference_image in _result_stage_map(reference_result).items():
+        stage_stacks[stage_name] = _empty_stage_stack(reference_image, harmonic_count)
 
-    for stage_name, reference_image in reference_stages.items():
-        stage_stacks[stage_name][:, :, reference_harmonic] = reference_image
+    per_harmonic_diagnostics: list[dict[str, float | int] | None] = [None] * harmonic_count
+    for stage_name, image in _result_stage_map(reference_result).items():
+        stage_stacks[stage_name][:, :, reference_harmonic] = image
+    per_harmonic_diagnostics[reference_harmonic] = _result_diagnostics(reference_result)
 
-    rotation_angle_rad_by_harmonic = [float("nan")] * raw_stack.shape[2]
-    rotation_angle_deg_by_harmonic = [float("nan")] * raw_stack.shape[2]
-    mirror_row_by_harmonic = [-1] * raw_stack.shape[2]
-    rotation_angle_rad_by_harmonic[reference_harmonic] = float(reference_diagnostics["rotation_angle_rad"])
-    rotation_angle_deg_by_harmonic[reference_harmonic] = float(reference_diagnostics["rotation_angle_deg"])
-    mirror_row_by_harmonic[reference_harmonic] = int(reference_diagnostics["mirror_row"])
-
-    for idx in range(raw_stack.shape[2]):
-        if idx == reference_harmonic:
+    for idx in range(harmonic_count):
+        if idx == reference_harmonic or not _harmonic_is_present(raw_stack, idx):
             continue
-        if not _harmonic_is_present(raw_stack, idx):
-            continue
-        processed_stages, _, _, diagnostics = open_hologram_2d(
+        result = reconstruct_hologram(
             raw_stack[:, :, idx],
             pad_fact=pad_fact,
             alpha=alpha,
@@ -247,34 +262,47 @@ def process_stack(
             filter_width_y=current_filter_width_y,
             processing_mode=processing_mode,
         )
-        for stage_name, image in processed_stages.items():
+        for stage_name, image in _result_stage_map(result).items():
             stage_stacks[stage_name][:, :, idx] = image
-        rotation_angle_rad_by_harmonic[idx] = float(diagnostics["rotation_angle_rad"])
-        rotation_angle_deg_by_harmonic[idx] = float(diagnostics["rotation_angle_deg"])
-        mirror_row_by_harmonic[idx] = int(diagnostics["mirror_row"])
+        per_harmonic_diagnostics[idx] = _result_diagnostics(result)
 
-    processing_settings = {
-        "processing_mode": processing_mode,
-        "fft_center_row": fft_center_row,
-        "auto_center_row": auto_center_row,
-        "auto_filter_width_y": auto_filter_width_y,
-        "current_center_row": current_center_row,
-        "current_filter_width_y": current_filter_width_y,
-        "auto_shift_y": fft_center_row - auto_center_row,
-        "current_shift_y": fft_center_row - current_center_row,
-        "zero_order_width_y": zero_order_width_y,
-        "first_order_width_y": first_order_width_y,
+    rotation_angle_rad_by_harmonic = [
+        float("nan") if diagnostic is None else float(diagnostic["rotation_angle_rad"]) for diagnostic in per_harmonic_diagnostics
+    ]
+    rotation_angle_deg_by_harmonic = [
+        float("nan") if diagnostic is None else float(diagnostic["rotation_angle_deg"]) for diagnostic in per_harmonic_diagnostics
+    ]
+    mirror_row_by_harmonic = [
+        -1 if diagnostic is None else int(diagnostic["mirror_row"]) for diagnostic in per_harmonic_diagnostics
+    ]
+
+    processing_diagnostics = {
+        "reference_harmonic": reference_harmonic,
+        "auto_geometry": asdict(auto_geometry),
+        "current_geometry": asdict(reference_result.geometry),
         "is_manual": is_manual,
-        "pad_fact": pad_fact,
-        "alpha": alpha,
-        "mirror_row": int(reference_diagnostics["mirror_row"]),
-        "rotation_angle_rad": float(reference_diagnostics["rotation_angle_rad"]),
-        "rotation_angle_deg": float(reference_diagnostics["rotation_angle_deg"]),
+        "per_harmonic": per_harmonic_diagnostics,
         "rotation_angle_rad_by_harmonic": rotation_angle_rad_by_harmonic,
         "rotation_angle_deg_by_harmonic": rotation_angle_deg_by_harmonic,
         "mirror_row_by_harmonic": mirror_row_by_harmonic,
     }
+    processing_settings = {
+        "processing_mode": processing_mode,
+        "pad_fact": pad_fact,
+        "alpha": alpha,
+        "fft_center_row": auto_geometry.fft_center_row,
+        "auto_center_row": auto_geometry.carrier_row,
+        "auto_filter_width_y": auto_geometry.filter_width_y,
+        "current_center_row": current_center_row,
+        "current_filter_width_y": current_filter_width_y,
+        "auto_shift_y": auto_geometry.fft_center_row - auto_geometry.carrier_row,
+        "current_shift_y": auto_geometry.fft_center_row - current_center_row,
+        "zero_order_width_y": zero_order_width_y,
+        "first_order_width_y": first_order_width_y,
+        "diagnostics": processing_diagnostics,
+    }
     return stage_stacks, processing_settings
+
 
 def load_passage(
     folder_path: str,
@@ -282,16 +310,21 @@ def load_passage(
     force_rebuild: bool = False,
     carrier_row_override: int | None = None,
     filter_width_override: int | None = None,
+    pad_fact: int = 4,
+    alpha: float = 0.3,
     processing_mode: str = "two_sideband",
 ) -> LoadedData:
     data, metadata = build_or_load_cache(folder_path, force_rebuild=force_rebuild)
     keys = validate_passage_data(data, passage)
     stage_stacks, processing_settings = process_stack(
         data[keys["o"]],
+        pad_fact=pad_fact,
+        alpha=alpha,
         carrier_row_override=carrier_row_override,
         filter_width_override=filter_width_override,
         processing_mode=processing_mode,
     )
+    processing_diagnostics = processing_settings.get("diagnostics", {})
 
     loaded = LoadedData(
         folder_path=metadata["folder_path"],
@@ -302,6 +335,7 @@ def load_passage(
         m=data.get(keys["m"]),
         stage_stacks=stage_stacks,
         processing_settings=processing_settings,
+        processing_diagnostics=processing_diagnostics,
         cache_path=metadata["cache_path"],
         metadata=metadata,
     )
@@ -353,11 +387,13 @@ def _export_figure(image: np.ndarray, title: str, output_path: str, cmap: str) -
 
 
 def export_all_views(loaded: LoadedData) -> list[str]:
-    validate_passage_data({PASSAGE_TO_KEYS[loaded.passage]["o"]: loaded.o, PASSAGE_TO_KEYS[loaded.passage]["z"]: loaded.z}, loaded.passage)
+    validate_passage_data(
+        {PASSAGE_TO_KEYS[loaded.passage]["o"]: loaded.o, PASSAGE_TO_KEYS[loaded.passage]["z"]: loaded.z},
+        loaded.passage,
+    )
     exported_files: list[str] = []
 
     for harmonic in EXPORT_HARMONICS:
-        harmonic_index = harmonic
         views = {
             "raw_amplitude": ("raw", "amplitude", "hot"),
             "raw_phase": ("raw", "phase", "bwr"),
@@ -367,7 +403,7 @@ def export_all_views(loaded: LoadedData) -> list[str]:
         for name, (stage_name, representation, cmap) in views.items():
             image = get_view_image(
                 loaded.stage_stacks,
-                harmonic_index,
+                harmonic,
                 stage_name,
                 representation,
                 processing_settings=loaded.processing_settings,
@@ -376,5 +412,4 @@ def export_all_views(loaded: LoadedData) -> list[str]:
             title = f"H{harmonic} {STAGE_LABELS[stage_name]} {representation.capitalize()} - {loaded.image_name}"
             _export_figure(image, title, output_path, cmap)
             exported_files.append(output_path)
-
     return exported_files

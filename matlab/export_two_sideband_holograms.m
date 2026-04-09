@@ -1,27 +1,39 @@
-function summary = export_two_sideband_holograms(folderPath, padFact, alphaValue)
+function summary = export_two_sideband_holograms(folderPath, varargin)
 %EXPORT_TWO_SIDEBAND_HOLOGRAMS Export SNOM holograms as per-harmonic MAT files.
-%   SUMMARY = EXPORT_TWO_SIDEBAND_HOLOGRAMS(FOLDERPATH) uses PADFACT=1 and
+%   SUMMARY = EXPORT_TWO_SIDEBAND_HOLOGRAMS(FOLDERPATH) uses PADFACT=4 and
 %   ALPHAVALUE=0.3 by default. SUMMARY =
-%   EXPORT_TWO_SIDEBAND_HOLOGRAMS(FOLDERPATH, PADFACT, ALPHAVALUE) loads the
-%   forward (O) and reverse (R-O) harmonic stacks found in FOLDERPATH, applies
-%   the same two-sideband processing workflow used by the Python preview app,
-%   and writes one self-contained MAT file per detected harmonic into:
+%   EXPORT_TWO_SIDEBAND_HOLOGRAMS(FOLDERPATH, 'Name', Value, ...) accepts
+%   processing options:
+%       'padFact'      positive integer vertical padding factor
+%       'alphaValue'   Tukey window alpha in [0, 1]
+%       'carrierRow'   optional manual Fourier-space carrier center
+%       'filterWidthY' optional manual Fourier-space filter width
+%   Legacy positional PADFACT and ALPHAVALUE inputs are still accepted for
+%   compatibility. The exporter loads the forward (O) and reverse (R-O)
+%   harmonic stacks found in FOLDERPATH, applies the same two-sideband
+%   processing workflow used by the Python preview app, and writes one
+%   self-contained MAT file per detected harmonic into:
 %       <folderPath>/matlab-two-sideband-export
 
-    arguments
-        folderPath (1, :) char
-        padFact (1, 1) double {mustBeInteger, mustBePositive} = 1
-        alphaValue (1, 1) double {mustBeFinite, mustBeNonnegative, mustBeLessThanOrEqual(alphaValue, 1)} = 0.3
-    end
+    narginchk(1, inf);
 
-    folderPath = char(string(folderPath));
-    if ~isfolder(folderPath)
+    folderPath = normalize_folder_path_input(folderPath);
+    options = parse_export_options(varargin{:});
+    padFact = options.padFact;
+    alphaValue = options.alphaValue;
+    manualCarrierRow = options.carrierRow;
+    manualFilterWidthY = options.filterWidthY;
+
+    if exist(folderPath, 'dir') ~= 7
         error('export_two_sideband_holograms:FolderNotFound', ...
             'Folder does not exist: %s', folderPath);
     end
 
     folderPath = char(java.io.File(folderPath).getCanonicalPath());
-    [~, imageName] = fileparts(folderPath);
+    folderEntries = dir(fullfile(folderPath, '*.gsf'));
+    folderEntries = folderEntries(~startsWith({folderEntries.name}, '.'));
+    [~, preferredImageName] = fileparts(folderPath);
+    imageName = detect_image_name(folderPath, preferredImageName, folderEntries);
     outputFolder = fullfile(folderPath, 'matlab-two-sideband-export');
     if ~exist(outputFolder, 'dir')
         mkdir(outputFolder);
@@ -52,7 +64,8 @@ function summary = export_two_sideband_holograms(folderPath, padFact, alphaValue
         end
 
         processed = process_stack(passageData.raw_stack, ...
-            passageData.available_harmonics, padFact, alphaValue, referenceHarmonic);
+            passageData.available_harmonics, padFact, alphaValue, referenceHarmonic, ...
+            manualCarrierRow, manualFilterWidthY);
 
         filesWritten = {};
         for harmonicIndex = reshape(passageData.available_harmonics, 1, [])
@@ -61,37 +74,32 @@ function summary = export_two_sideband_holograms(folderPath, padFact, alphaValue
             rawAmplitude = abs(rawHologram);
             rawPhase = angle(rawHologram);
             processedAmplitude = abs(processedHologram);
-            processedPhase = processed_phase(processedHologram);
+            processedPhase = compute_processed_phase(processedHologram);
             fileName = sprintf('%s_h%d_two_sideband.mat', passageName, harmonicIndex);
             outputPath = fullfile(outputFolder, fileName);
 
-            passage = passageName; %#ok<NASGU>
-            harmonic_index = harmonicIndex; %#ok<NASGU>
-            processing_mode = processingMode; %#ok<NASGU>
-            image_name = imageName; %#ok<NASGU>
-            folder_path = folderPath; %#ok<NASGU>
-            raw_hologram = rawHologram; %#ok<NASGU>
-            processed_hologram = processedHologram; %#ok<NASGU>
-            raw_amplitude = rawAmplitude; %#ok<NASGU>
-            raw_phase = rawPhase; %#ok<NASGU>
-            processed_amplitude = processedAmplitude; %#ok<NASGU>
-            processed_phase = processedPhase; %#ok<NASGU>
-            carrier_row = processed.carrier_row; %#ok<NASGU>
-            filter_width_y = processed.filter_width_y; %#ok<NASGU>
-            fft_center_row = processed.fft_center_row; %#ok<NASGU>
-            mirror_row = processed.mirror_row_by_harmonic(harmonicIndex + 1); %#ok<NASGU>
-            rotation_angle_rad = processed.rotation_angle_rad_by_harmonic(harmonicIndex + 1); %#ok<NASGU>
-            rotation_angle_deg = processed.rotation_angle_deg_by_harmonic(harmonicIndex + 1); %#ok<NASGU>
-            pad_fact = padFact; %#ok<NASGU>
-            alpha = alphaValue; %#ok<NASGU>
+            outputData = struct( ...
+                'image_name', imageName, ...
+                'folder_path', folderPath, ...
+                'passage', passageName, ...
+                'harmonic_index', harmonicIndex, ...
+                'processing_mode', processingMode, ...
+                'raw_hologram', rawHologram, ...
+                'processed_hologram', processedHologram, ...
+                'raw_amplitude', rawAmplitude, ...
+                'raw_phase', rawPhase, ...
+                'processed_amplitude', processedAmplitude, ...
+                'processed_phase', processedPhase, ...
+                'carrier_row', processed.carrier_row, ...
+                'filter_width_y', processed.filter_width_y, ...
+                'fft_center_row', processed.fft_center_row, ...
+                'mirror_row', processed.mirror_row_by_harmonic(harmonicIndex + 1), ...
+                'rotation_angle_rad', processed.rotation_angle_rad_by_harmonic(harmonicIndex + 1), ...
+                'rotation_angle_deg', processed.rotation_angle_deg_by_harmonic(harmonicIndex + 1), ...
+                'pad_fact', padFact, ...
+                'alpha', alphaValue);
 
-            save(outputPath, ...
-                'image_name', 'folder_path', 'passage', 'harmonic_index', ...
-                'processing_mode', 'raw_hologram', 'processed_hologram', ...
-                'raw_amplitude', 'raw_phase', 'processed_amplitude', ...
-                'processed_phase', 'carrier_row', 'filter_width_y', ...
-                'fft_center_row', 'mirror_row', 'rotation_angle_rad', ...
-                'rotation_angle_deg', 'pad_fact', 'alpha');
+            save(outputPath, '-struct', 'outputData');
             filesWritten{end + 1, 1} = outputPath; %#ok<AGROW>
         end
 
@@ -112,6 +120,80 @@ function summary = export_two_sideband_holograms(folderPath, padFact, alphaValue
         passageSummary.pad_fact = padFact;
         passageSummary.alpha = alphaValue;
         summary(end + 1, 1) = passageSummary; %#ok<AGROW>
+    end
+
+    if isempty(summary)
+        error('export_two_sideband_holograms:NoMatchingPassages', ...
+            ['No forward (O) or reverse (R-O) harmonic pairs were found for dataset "%s" in folder: %s. ', ...
+             'Expected files like "%s O2A raw.gsf" and "%s O2P raw.gsf".'], ...
+            imageName, folderPath, imageName, imageName);
+    end
+end
+
+
+function options = parse_export_options(varargin)
+    options = struct( ...
+        'padFact', 4, ...
+        'alphaValue', 0.3, ...
+        'carrierRow', [], ...
+        'filterWidthY', []);
+
+    argOffset = 1;
+    if argOffset <= numel(varargin) && ~(ischar(varargin{argOffset}) || (isstring(varargin{argOffset}) && isscalar(varargin{argOffset})))
+        if ~isempty(varargin{argOffset})
+            options.padFact = varargin{argOffset};
+        end
+        argOffset = argOffset + 1;
+    end
+    if argOffset <= numel(varargin) && ~(ischar(varargin{argOffset}) || (isstring(varargin{argOffset}) && isscalar(varargin{argOffset})))
+        if ~isempty(varargin{argOffset})
+            options.alphaValue = varargin{argOffset};
+        end
+        argOffset = argOffset + 1;
+    end
+
+    remainingArgs = varargin(argOffset:end);
+    if mod(numel(remainingArgs), 2) ~= 0
+        error('export_two_sideband_holograms:InvalidArguments', ...
+            'Name-value arguments must come in pairs.');
+    end
+
+    for argIndex = 1:2:numel(remainingArgs)
+        optionName = remainingArgs{argIndex};
+        optionValue = remainingArgs{argIndex + 1};
+        if isstring(optionName) && isscalar(optionName)
+            optionName = char(optionName);
+        end
+        validateattributes(optionName, {'char'}, {'row'}, mfilename, 'optionName');
+
+        switch lower(optionName)
+            case 'padfact'
+                options.padFact = optionValue;
+            case 'alphavalue'
+                options.alphaValue = optionValue;
+            case 'carrierrow'
+                options.carrierRow = optionValue;
+            case 'filterwidthy'
+                options.filterWidthY = optionValue;
+            otherwise
+                error('export_two_sideband_holograms:UnknownOption', ...
+                    'Unknown option "%s". Supported options are padFact, alphaValue, carrierRow, and filterWidthY.', ...
+                    optionName);
+        end
+    end
+
+    validateattributes(options.padFact, {'numeric'}, {'scalar', 'real', 'finite', 'integer', 'positive'}, ...
+        mfilename, 'padFact');
+    validateattributes(options.alphaValue, {'numeric'}, {'scalar', 'real', 'finite', '>=', 0, '<=', 1}, ...
+        mfilename, 'alphaValue');
+
+    if ~isempty(options.carrierRow)
+        validateattributes(options.carrierRow, {'numeric'}, {'scalar', 'real', 'finite', 'integer', 'positive'}, ...
+            mfilename, 'carrierRow');
+    end
+    if ~isempty(options.filterWidthY)
+        validateattributes(options.filterWidthY, {'numeric'}, {'scalar', 'real', 'finite', 'integer', 'positive'}, ...
+            mfilename, 'filterWidthY');
     end
 end
 
@@ -143,8 +225,8 @@ function passageData = load_passage_stack(folderPath, imageName, modeName)
 
     for harmonicIndex = 0:5
         [ampPath, phasePath] = mode_file_paths(folderPath, imageName, modeName, harmonicIndex);
-        ampExists = isfile(ampPath);
-        phaseExists = isfile(phasePath);
+        ampExists = exist(ampPath, 'file') == 2;
+        phaseExists = exist(phasePath, 'file') == 2;
         if xor(ampExists, phaseExists)
             error('export_two_sideband_holograms:IncompleteHarmonicPair', ...
                 ['Passage "%s" harmonic %d is incomplete. ', ...
@@ -177,6 +259,65 @@ function passageData = load_passage_stack(folderPath, imageName, modeName)
     passageData = struct( ...
         'raw_stack', rawStack, ...
         'available_harmonics', availableHarmonics);
+end
+
+
+function imageName = detect_image_name(folderPath, preferredImageName, folderEntries)
+    candidateNames = collect_image_name_candidates(folderEntries);
+    if isempty(candidateNames)
+        error('export_two_sideband_holograms:NoMatchingPassages', ...
+            ['No supported O/R-O GSF harmonic files were found in folder: %s. ', ...
+             'Expected files like "%s O2A raw.gsf" and "%s O2P raw.gsf".'], ...
+            folderPath, preferredImageName, preferredImageName);
+    end
+
+    if any(strcmp(candidateNames, preferredImageName))
+        imageName = preferredImageName;
+        return;
+    end
+
+    if numel(candidateNames) == 1
+        imageName = candidateNames{1};
+        return;
+    end
+
+    error('export_two_sideband_holograms:AmbiguousImageName', ...
+        ['Unable to determine a unique dataset prefix in folder: %s. ', ...
+         'Folder name suggests "%s", but matching GSF prefixes were: %s'], ...
+        folderPath, preferredImageName, strjoin(candidateNames, ', '));
+end
+
+
+function candidateNames = collect_image_name_candidates(folderEntries)
+    candidateNames = {};
+    for entryIndex = 1:numel(folderEntries)
+        token = regexp(folderEntries(entryIndex).name, ...
+            '^(.*) (R-O|O)[0-5][AP] raw\.gsf$', 'tokens', 'once');
+        if isempty(token)
+            continue;
+        end
+        candidateNames{end + 1, 1} = token{1}; %#ok<AGROW>
+    end
+
+    if isempty(candidateNames)
+        return;
+    end
+
+    [~, uniqueIdx] = unique(candidateNames, 'stable');
+    candidateNames = candidateNames(sort(uniqueIdx));
+end
+
+
+function folderPath = normalize_folder_path_input(folderPath)
+    if isa(folderPath, 'string')
+        if numel(folderPath) ~= 1
+            error('export_two_sideband_holograms:InvalidFolderPath', ...
+                'folderPath must be a character row vector or scalar string.');
+        end
+        folderPath = char(folderPath);
+    end
+
+    validateattributes(folderPath, {'char'}, {'row'}, mfilename, 'folderPath', 1);
 end
 
 
@@ -227,10 +368,11 @@ function data = read_gsf(filePath)
 end
 
 
-function processed = process_stack(rawStack, availableHarmonics, padFact, alpha, referenceHarmonic)
+function processed = process_stack(rawStack, availableHarmonics, padFact, alpha, referenceHarmonic, ...
+    carrierRowOverride, filterWidthOverride)
     referenceImage = rawStack(:, :, referenceHarmonic + 1);
     [referenceProcessed, carrierRow, filterWidthY, diagnostics] = ...
-        open_hologram_2d(referenceImage, padFact, alpha, [], []);
+        open_hologram_2d(referenceImage, padFact, alpha, carrierRowOverride, filterWidthOverride);
 
     processedStack = complex(nan(size(rawStack)), nan(size(rawStack)));
     processedStack(:, :, referenceHarmonic + 1) = referenceProcessed;
@@ -287,15 +429,19 @@ function [imageComplexOut, carrierRow, filterWidthY, diagnostics] = ...
     magSignalFt = abs(signalFt);
     verticalProfile = build_vertical_profile(magSignalFt);
 
+    hasManualCarrierRow = ~isempty(carrierRow);
+    hasManualFilterWidth = ~isempty(filterWidthY) && filterWidthY > 0;
+
     if isempty(carrierRow)
         carrierRow = round(find_vertical_carrier(verticalProfile));
     end
     if isempty(filterWidthY) || filterWidthY <= 0
         filterWidthY = estimate_filter_width(verticalProfile, carrierRow);
     end
-    [carrierRow, filterWidthY] = validate_vertical_filter(nY2, carrierRow, filterWidthY);
+    [carrierRow, filterWidthY] = validate_vertical_filter( ...
+        nY2, carrierRow, filterWidthY, hasManualCarrierRow, hasManualFilterWidth);
 
-    mirrorRow = nY2 - carrierRow + 1;
+    mirrorRow = nY2 - carrierRow + 2;
 
     sidebandFilterPos = build_sideband_filter(nY2, carrierRow, filterWidthY, alpha);
     sidebandFilterNeg = build_sideband_filter(nY2, mirrorRow, filterWidthY, alpha);
@@ -450,10 +596,11 @@ function width = estimate_filter_width(profile, carrierRow)
 end
 
 
-function [carrierRow, width] = validate_vertical_filter(lengthY, carrierRow, filterWidthY)
+function [carrierRow, width] = validate_vertical_filter(lengthY, carrierRow, filterWidthY, ...
+    allowZeroOrderCarrierOverlap, allowZeroOrderWidthOverlap)
     centerIdx = floor(lengthY / 2) + 1;
     exclusionHalfWidth = max(8, floor(lengthY / 32));
-    if carrierRow >= centerIdx - exclusionHalfWidth
+    if ~allowZeroOrderCarrierOverlap && carrierRow >= centerIdx - exclusionHalfWidth
         error('export_two_sideband_holograms:InvalidCarrierRow', ...
             'Carrier center must stay above the zero-order exclusion band.');
     end
@@ -464,7 +611,7 @@ function [carrierRow, width] = validate_vertical_filter(lengthY, carrierRow, fil
 
     width = normalize_filter_width(filterWidthY, lengthY);
     [~, stopIdx] = band_bounds(carrierRow, width, lengthY);
-    if stopIdx >= centerIdx - exclusionHalfWidth
+    if ~allowZeroOrderWidthOverlap && stopIdx >= centerIdx - exclusionHalfWidth
         error('export_two_sideband_holograms:InvalidFilterWidth', ...
             'Filter width reaches the zero order; reduce the width or move the center upward.');
     end
@@ -559,7 +706,7 @@ function windowValues = hann_window(width)
 end
 
 
-function phaseImage = processed_phase(image)
+function phaseImage = compute_processed_phase(image)
     phaseImage = unwrap(angle(image), [], 1);
     phaseImage = correct_baseline_slope(phaseImage);
 end

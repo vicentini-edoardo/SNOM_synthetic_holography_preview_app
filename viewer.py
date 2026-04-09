@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QRadioButton,
     QSizePolicy,
+    QSlider,
     QSpacerItem,
     QVBoxLayout,
     QWidget,
@@ -67,18 +68,15 @@ VIEW_CMAPS = {
 }
 
 COLORS = {
-    "bg": "#090d1b",
-    "panel": "#0d1327",
-    "panel_alt": "#111a33",
-    "line": "#284d80",
-    "text": "#c8e8ff",
-    "muted": "#85a8cf",
-    "cyan": "#6de7ff",
-    "cyan_strong": "#17c5ff",
-    "magenta": "#f36dff",
-    "magenta_strong": "#cc43ff",
-    "danger": "#ff4fc7",
-    "gold": "#ffd166",
+    "bg": "#16181a",
+    "panel": "#1a1e22",
+    "panel_alt": "#22282d",
+    "line": "#394147",
+    "text": "#f1eadf",
+    "muted": "#b6aca0",
+    "accent": "#f1c981",
+    "accent_strong": "#d8a85a",
+    "danger": "#d17c67",
 }
 
 APP_QSS = f"""
@@ -87,14 +85,14 @@ QMainWindow {{
 }}
 QWidget {{
     color: {COLORS["text"]};
-    font-family: "Helvetica", "Arial", sans-serif;
-    font-size: 14px;
+    font-family: "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+    font-size: 13px;
 }}
 QFrame#panel, QGroupBox#panel {{
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
         stop:0 {COLORS["panel"]}, stop:1 {COLORS["panel_alt"]});
     border: 1px solid {COLORS["line"]};
-    border-radius: 12px;
+    border-radius: 14px;
 }}
 QGroupBox#panel {{
     margin-top: 14px;
@@ -104,21 +102,26 @@ QGroupBox#panel::title {{
     subcontrol-origin: margin;
     left: 12px;
     padding: 0 6px;
-    color: {COLORS["cyan"]};
+    color: {COLORS["accent"]};
+    font-weight: 600;
 }}
 QLineEdit, QComboBox, QPlainTextEdit {{
-    background: rgba(6, 15, 32, 0.88);
+    background: rgba(18, 20, 22, 0.94);
     border: 1px solid {COLORS["line"]};
     border-radius: 8px;
     padding: 8px 10px;
-    selection-background-color: {COLORS["cyan_strong"]};
+    selection-background-color: rgba(241, 201, 129, 0.35);
+    selection-color: {COLORS["text"]};
+}}
+QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus {{
+    border-color: {COLORS["accent"]};
 }}
 QComboBox::drop-down {{
     subcontrol-origin: padding;
     subcontrol-position: top right;
     width: 34px;
     border-left: 1px solid {COLORS["line"]};
-    background: rgba(18, 39, 69, 0.9);
+    background: rgba(34, 40, 45, 0.96);
     border-top-right-radius: 8px;
     border-bottom-right-radius: 8px;
 }}
@@ -128,29 +131,54 @@ QComboBox::down-arrow {{
     height: 0;
     border-left: 6px solid transparent;
     border-right: 6px solid transparent;
-    border-top: 8px solid {COLORS["cyan"]};
+    border-top: 8px solid {COLORS["accent"]};
 }}
 QComboBox QAbstractItemView {{
     background: {COLORS["panel"]};
     border: 1px solid {COLORS["line"]};
-    selection-background-color: rgba(23, 197, 255, 0.3);
+    selection-background-color: rgba(241, 201, 129, 0.22);
 }}
 QPushButton {{
-    background: rgba(10, 27, 48, 0.95);
-    border: 1px solid {COLORS["cyan_strong"]};
+    background: rgba(32, 37, 41, 0.95);
+    border: 1px solid {COLORS["line"]};
     border-radius: 10px;
     padding: 8px 16px;
     color: {COLORS["text"]};
 }}
 QPushButton:hover {{
-    background: rgba(16, 54, 84, 0.95);
+    border-color: {COLORS["accent_strong"]};
+    background: rgba(40, 46, 51, 0.98);
+}}
+QPushButton:disabled {{
+    color: rgba(241, 234, 223, 0.45);
+    background: rgba(24, 27, 30, 0.85);
+    border-color: rgba(57, 65, 71, 0.8);
+}}
+QPushButton#secondary {{
+    background: rgba(26, 30, 34, 0.96);
+    border-color: rgba(57, 65, 71, 0.95);
+}}
+QPushButton#secondary:hover {{
+    border-color: {COLORS["accent"]};
 }}
 QPushButton#accent {{
-    border-color: {COLORS["magenta"]};
-    color: #ffd6ff;
+    border-color: rgba(241, 201, 129, 0.48);
+    color: {COLORS["accent"]};
+    background: rgba(28, 30, 32, 0.98);
 }}
 QPushButton#accent:hover {{
-    background: rgba(67, 14, 73, 0.95);
+    background: rgba(37, 32, 25, 0.98);
+    border-color: {COLORS["accent"]};
+}}
+QPushButton#primary {{
+    background: rgba(241, 201, 129, 0.16);
+    border-color: {COLORS["accent"]};
+    color: #fff4df;
+    font-weight: 600;
+}}
+QPushButton#primary:hover {{
+    background: rgba(241, 201, 129, 0.22);
+    border-color: #f6d797;
 }}
 QRadioButton, QCheckBox {{
     spacing: 8px;
@@ -161,19 +189,42 @@ QRadioButton::indicator, QCheckBox::indicator {{
 }}
 QRadioButton::indicator::unchecked, QCheckBox::indicator::unchecked {{
     border: 1px solid {COLORS["line"]};
-    background: rgba(5, 13, 26, 0.95);
+    background: rgba(18, 20, 22, 0.95);
 }}
 QRadioButton::indicator::checked, QCheckBox::indicator::checked {{
-    border: 1px solid {COLORS["cyan"]};
-    background: {COLORS["cyan_strong"]};
+    border: 1px solid {COLORS["accent"]};
+    background: {COLORS["accent"]};
 }}
 QLabel#sectionTitle {{
-    color: {COLORS["cyan"]};
-    font-size: 15px;
-    font-weight: 600;
+    color: {COLORS["accent"]};
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+}}
+QLabel#metricLabel {{
+    color: {COLORS["muted"]};
+    font-size: 11px;
 }}
 QLabel#metricValue {{
-    color: #f3fbff;
+    color: #fff4df;
+    background: rgba(241, 201, 129, 0.08);
+    border: 1px solid rgba(241, 201, 129, 0.24);
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-family: "Menlo", "Monaco", monospace;
+    font-size: 12px;
+    min-height: 18px;
+}}
+QLineEdit#tuningInput {{
+    background: rgba(18, 20, 22, 0.98);
+    border: 1px solid rgba(241, 201, 129, 0.28);
+    color: #fff4df;
+    font-family: "Menlo", "Monaco", monospace;
+    font-size: 12px;
+    padding: 7px 10px;
+}}
+QPlainTextEdit {{
+    color: {COLORS["text"]};
 }}
 """
 
@@ -191,7 +242,7 @@ class HologramViewerWindow(QMainWindow):
         self._sliders: list[tuple[RangeSlider, int]] = []
         self._apply_theme()
         self._build_ui()
-        self._sync_advanced_settings()
+        self._sync_tuning_settings()
 
         if initial_folder:
             self.folder_edit.setText(initial_folder)
@@ -211,16 +262,45 @@ class HologramViewerWindow(QMainWindow):
         root_layout.setContentsMargins(14, 14, 14, 14)
         root_layout.setSpacing(12)
 
-        root_layout.addWidget(self._build_command_bar())
-        root_layout.addWidget(self._build_control_bar())
+        attribution_label = QLabel(
+            "Developed by Edoardo Vicentini. Citation: Vicentini, E. (2026). "
+            "SNOM synthetic holography preview app [Computer software]. GitHub. "
+            "https://github.com/vicentini-edoardo/SNOM_synthetic_holography_preview_app"
+        )
+        attribution_label.setObjectName("metricLabel")
+        attribution_label.setWordWrap(True)
+        root_layout.addWidget(attribution_label, 0)
 
-        content_layout = QHBoxLayout()
-        content_layout.setSpacing(12)
-        content_layout.addWidget(self._build_sidebar(), 0)
+        shell_row = QWidget()
+        shell_layout = QHBoxLayout(shell_row)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(12)
+
+        self.command_rail = QWidget()
+        command_rail_layout = QVBoxLayout(self.command_rail)
+        command_rail_layout.setContentsMargins(0, 0, 0, 0)
+        command_rail_layout.setSpacing(12)
+        self.dataset_panel = self._build_dataset_panel()
+        self.acquisition_panel = self._build_acquisition_panel()
+        self.tuning_panel = self._build_tuning_panel()
+        command_rail_layout.addWidget(self.dataset_panel)
+        command_rail_layout.addWidget(self.acquisition_panel)
+        command_rail_layout.addWidget(self.tuning_panel)
+        command_rail_layout.addStretch(1)
+        self.command_rail.setMinimumWidth(320)
+        self.command_rail.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        shell_layout.addWidget(self.command_rail, 0)
+
+        self.viewer_workspace = QWidget()
+        content_layout = QVBoxLayout(self.viewer_workspace)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
         content_layout.addWidget(self._build_plot_panel(), 1)
-        root_layout.addLayout(content_layout, 1)
+        shell_layout.addWidget(self.viewer_workspace, 1)
+        root_layout.addWidget(shell_row, 1)
 
-        root_layout.addWidget(self._build_log_panel(), 0)
+        self.telemetry_panel = self._build_log_panel()
+        root_layout.addWidget(self.telemetry_panel, 0)
 
     def _panel(self, title: str | None = None) -> QFrame | QGroupBox:
         if title:
@@ -230,38 +310,41 @@ class HologramViewerWindow(QMainWindow):
         panel.setObjectName("panel")
         return panel
 
-    def _build_command_bar(self) -> QWidget:
-        panel = self._panel()
-        layout = QHBoxLayout(panel)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(12)
+    def _build_dataset_panel(self) -> QWidget:
+        panel = self._panel("Dataset")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(14, 18, 14, 14)
+        layout.setSpacing(10)
 
         self.folder_edit = QLineEdit()
         self.folder_edit.setPlaceholderText("Select a hologram folder")
-        layout.addWidget(self.folder_edit, 1)
+        layout.addWidget(self.folder_edit)
 
-        browse_button = QPushButton("Browse")
-        browse_button.clicked.connect(self.browse_folder)
-        load_button = QPushButton("Load")
-        load_button.clicked.connect(self.load_current_folder)
-        export_button = QPushButton("Export All")
-        export_button.clicked.connect(self.export_current_folder)
-        export_button.setObjectName("accent")
+        button_row = QHBoxLayout()
+        self.browse_button = QPushButton("Browse")
+        self.browse_button.setObjectName("secondary")
+        self.browse_button.clicked.connect(self.browse_folder)
+        self.load_button = QPushButton("Load")
+        self.load_button.setObjectName("primary")
+        self.load_button.clicked.connect(self.load_current_folder)
+        self.export_button = QPushButton("Export All")
+        self.export_button.setObjectName("accent")
+        self.export_button.clicked.connect(self.export_current_folder)
 
-        layout.addWidget(browse_button)
-        layout.addWidget(load_button)
-        layout.addWidget(export_button)
+        button_row.addWidget(self.browse_button)
+        button_row.addWidget(self.load_button)
+        button_row.addWidget(self.export_button)
+        layout.addLayout(button_row)
         return panel
 
-    def _build_control_bar(self) -> QWidget:
-        panel = self._panel()
+    def _build_acquisition_panel(self) -> QWidget:
+        panel = self._panel("Acquisition")
         layout = QGridLayout(panel)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setHorizontalSpacing(18)
+        layout.setContentsMargins(14, 18, 14, 14)
+        layout.setHorizontalSpacing(14)
         layout.setVerticalSpacing(10)
         layout.setColumnStretch(1, 1)
         layout.setColumnStretch(3, 1)
-        layout.setColumnStretch(5, 1)
 
         passage_title = QLabel("Passage")
         passage_title.setObjectName("sectionTitle")
@@ -278,19 +361,19 @@ class HologramViewerWindow(QMainWindow):
         passage_row.addWidget(self.forward_radio)
         passage_row.addWidget(self.reverse_radio)
         passage_row.addStretch(1)
-        layout.addLayout(passage_row, 0, 1, 1, 3)
+        layout.addLayout(passage_row, 0, 1)
 
         harmonic_title = QLabel("Harmonic")
         harmonic_title.setObjectName("sectionTitle")
-        layout.addWidget(harmonic_title, 0, 4)
+        layout.addWidget(harmonic_title, 0, 2)
         self.harmonic_combo = QComboBox()
-        self.harmonic_combo.addItems([str(i) for i in range(1, 6)])
-        self.harmonic_combo.setCurrentText("1")
+        self.harmonic_combo.addItems([str(i) for i in range(6)])
+        self.harmonic_combo.setCurrentText("2")
         self.harmonic_combo.setMinimumWidth(150)
         self.harmonic_combo.currentIndexChanged.connect(self._on_harmonic_change)
-        layout.addWidget(self.harmonic_combo, 0, 5)
+        layout.addWidget(self.harmonic_combo, 0, 3)
 
-        view_title = QLabel("View")
+        view_title = QLabel("Stage")
         view_title.setObjectName("sectionTitle")
         layout.addWidget(view_title, 1, 0)
         self.view_combo = QComboBox()
@@ -300,65 +383,98 @@ class HologramViewerWindow(QMainWindow):
         self.view_combo.setMinimumWidth(180)
         self.view_combo.currentIndexChanged.connect(self.refresh_plot)
         layout.addWidget(self.view_combo, 1, 1)
-        return panel
-
-    def _build_sidebar(self) -> QWidget:
-        panel = self._panel("Advanced Settings")
-        panel.setFixedWidth(320)
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(14, 20, 14, 14)
-        layout.setSpacing(12)
-
-        self.show_advanced_checkbox = QCheckBox("Show")
-        self.show_advanced_checkbox.toggled.connect(self._update_advanced_panel)
-        layout.addWidget(self.show_advanced_checkbox)
-
-        self.advanced_content = QWidget()
-        advanced_layout = QGridLayout(self.advanced_content)
-        advanced_layout.setContentsMargins(0, 0, 0, 0)
-        advanced_layout.setHorizontalSpacing(10)
-        advanced_layout.setVerticalSpacing(10)
-
-        advanced_layout.addWidget(QLabel("Processing Mode"), 0, 0)
+        layout.addWidget(QLabel("Mode"), 1, 2)
         self.processing_mode_combo = QComboBox()
         for mode_key, mode_label in PROCESSING_MODES.items():
             self.processing_mode_combo.addItem(mode_label, mode_key)
         self.processing_mode_combo.setCurrentIndex(self.processing_mode_combo.findData(self.processing_mode))
         self.processing_mode_combo.currentIndexChanged.connect(self._on_processing_mode_change)
-        advanced_layout.addWidget(self.processing_mode_combo, 0, 1)
+        layout.addWidget(self.processing_mode_combo, 1, 3)
+        return panel
 
-        self.auto_shift_value = self._metric_row(advanced_layout, 1, "Detected Shift (px)")
-        self.auto_width_value = self._metric_row(advanced_layout, 2, "Detected Width (px)")
-        self.zero_order_width_value = self._metric_row(advanced_layout, 3, "0th Order Width (px)")
-        self.first_order_width_value = self._metric_row(advanced_layout, 4, "1st Order Width (px)")
-        self.rotation_angle_value = self._metric_row(advanced_layout, 5, "Rotation Angle (deg)")
+    def _build_tuning_panel(self) -> QWidget:
+        panel = self._panel("Tuning")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(14, 18, 14, 14)
+        layout.setSpacing(12)
 
-        advanced_layout.addWidget(QLabel("Current Shift (px)"), 6, 0)
+        header_row = QHBoxLayout()
+        self.tuning_toggle_button = QPushButton("Show Manual Tuning")
+        self.tuning_toggle_button.setObjectName("secondary")
+        self.tuning_toggle_button.setCheckable(True)
+        self.tuning_toggle_button.toggled.connect(self._update_tuning_panel)
+        header_row.addWidget(self.tuning_toggle_button)
+        header_row.addStretch(1)
+        layout.addLayout(header_row)
+
+        self.tuning_content = QWidget()
+        tuning_layout = QGridLayout(self.tuning_content)
+        tuning_layout.setContentsMargins(0, 0, 0, 0)
+        tuning_layout.setHorizontalSpacing(10)
+        tuning_layout.setVerticalSpacing(10)
+
+        self.auto_shift_value = self._metric_row(tuning_layout, 0, "Detected Shift (px)")
+        self.auto_width_value = self._metric_row(tuning_layout, 1, "Detected Width (px)")
+        self.zero_order_width_value = self._metric_row(tuning_layout, 2, "0th Order Width (px)")
+        self.first_order_width_value = self._metric_row(tuning_layout, 3, "1st Order Width (px)")
+        self.rotation_angle_value = self._metric_row(tuning_layout, 4, "Rotation Angle (deg)")
+
+        tuning_layout.addWidget(QLabel("Current Shift (px)"), 5, 0)
         self.shift_edit = QLineEdit()
-        advanced_layout.addWidget(self.shift_edit, 6, 1)
-        advanced_layout.addWidget(QLabel("Current Width (px)"), 7, 0)
-        self.width_edit = QLineEdit()
-        advanced_layout.addWidget(self.width_edit, 7, 1)
+        self.shift_edit.setObjectName("tuningInput")
+        self.shift_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.shift_edit.textChanged.connect(self._sync_width_slider_bounds)
+        tuning_layout.addWidget(self.shift_edit, 5, 1)
+        tuning_layout.addWidget(QLabel("Current Width (px)"), 6, 0)
+        width_row = QHBoxLayout()
+        width_row.setSpacing(10)
+        self.width_slider = QSlider(Qt.Orientation.Horizontal)
+        self.width_slider.setRange(0, 0)
+        self.width_slider.valueChanged.connect(self._on_width_slider_change)
+        width_row.addWidget(self.width_slider, 1)
+        self.width_value_label = QLabel("0")
+        self.width_value_label.setObjectName("metricValue")
+        self.width_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.width_value_label.setMinimumWidth(64)
+        width_row.addWidget(self.width_value_label, 0)
+        tuning_layout.addLayout(width_row, 6, 1)
+        tuning_layout.addWidget(QLabel("Filter Alpha"), 7, 0)
+        self.alpha_edit = QLineEdit()
+        self.alpha_edit.setObjectName("tuningInput")
+        self.alpha_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.alpha_edit.setText("0.3")
+        tuning_layout.addWidget(self.alpha_edit, 7, 1)
+        tuning_layout.addWidget(QLabel("Padding Factor"), 8, 0)
+        self.pad_fact_edit = QLineEdit()
+        self.pad_fact_edit.setObjectName("tuningInput")
+        self.pad_fact_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.pad_fact_edit.setText("4")
+        self.pad_fact_edit.textChanged.connect(self._sync_width_slider_bounds)
+        tuning_layout.addWidget(self.pad_fact_edit, 8, 1)
 
         button_row = QHBoxLayout()
-        self.apply_advanced_button = QPushButton("Apply")
-        self.apply_advanced_button.clicked.connect(self.apply_advanced_settings)
-        self.reset_advanced_button = QPushButton("Reset to Auto")
-        self.reset_advanced_button.clicked.connect(self.reset_advanced_settings)
-        self.reset_advanced_button.setObjectName("accent")
-        button_row.addWidget(self.apply_advanced_button)
-        button_row.addWidget(self.reset_advanced_button)
-        advanced_layout.addLayout(button_row, 8, 0, 1, 2)
+        self.apply_tuning_button = QPushButton("Apply")
+        self.apply_tuning_button.setObjectName("primary")
+        self.apply_tuning_button.clicked.connect(self.apply_tuning_settings)
+        self.reset_tuning_button = QPushButton("Reset to Auto")
+        self.reset_tuning_button.setObjectName("secondary")
+        self.reset_tuning_button.clicked.connect(self.reset_tuning_settings)
+        button_row.addWidget(self.apply_tuning_button)
+        button_row.addWidget(self.reset_tuning_button)
+        tuning_layout.addLayout(button_row, 9, 0, 1, 2)
 
-        layout.addWidget(self.advanced_content)
+        layout.addWidget(self.tuning_content)
         layout.addItem(QSpacerItem(20, 20, QSizePolicy.Minimum, QSizePolicy.Expanding))
-        self._update_advanced_panel(False)
+        self._update_tuning_panel(False)
         return panel
 
     def _metric_row(self, layout: QGridLayout, row: int, label_text: str) -> QLabel:
-        layout.addWidget(QLabel(label_text), row, 0)
+        label = QLabel(label_text)
+        label.setObjectName("metricLabel")
+        layout.addWidget(label, row, 0)
         value = QLabel("-")
         value.setObjectName("metricValue")
+        value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(value, row, 1)
         return value
 
@@ -374,9 +490,10 @@ class HologramViewerWindow(QMainWindow):
         self.toolbar = NavigationToolbar2QT(self.canvas, panel)
         self.toolbar.setIconSize(self.toolbar.iconSize())
         self.toolbar.setStyleSheet(
-            f"QToolBar {{ background: {COLORS['panel']}; border: 1px solid {COLORS['line']}; spacing: 6px; }}"
-            f"QToolButton {{ background: rgba(10,27,48,0.92); border: 1px solid {COLORS['line']}; border-radius: 8px; padding: 6px; color: {COLORS['text']}; }}"
-            f"QToolButton:hover {{ border-color: {COLORS['cyan_strong']}; }}"
+            f"QToolBar {{ background: {COLORS['panel']}; border: 1px solid {COLORS['line']}; border-radius: 10px; spacing: 6px; }}"
+            f"QToolButton {{ background: rgba(32,37,41,0.94); border: 1px solid {COLORS['line']}; border-radius: 8px; padding: 6px; color: {COLORS['text']}; }}"
+            f"QToolButton:hover {{ border-color: {COLORS['accent_strong']}; }}"
+            f"QToolButton:checked, QToolButton:pressed {{ background: rgba(241,201,129,0.14); border-color: {COLORS['accent']}; }}"
         )
         self._recolor_toolbar_icons()
         layout.addWidget(self.canvas, 1)
@@ -409,14 +526,14 @@ class HologramViewerWindow(QMainWindow):
 
     def _recolor_toolbar_icons(self) -> None:
         accent_map = {
-            "Home": COLORS["cyan"],
+            "Home": COLORS["accent"],
             "Back": COLORS["text"],
             "Forward": COLORS["text"],
-            "Pan": COLORS["cyan_strong"],
-            "Zoom": COLORS["cyan_strong"],
-            "Subplots": COLORS["magenta"],
-            "Customize": COLORS["magenta"],
-            "Save": COLORS["gold"],
+            "Pan": COLORS["accent_strong"],
+            "Zoom": COLORS["accent_strong"],
+            "Subplots": COLORS["muted"],
+            "Customize": COLORS["muted"],
+            "Save": COLORS["accent"],
         }
         for action in self.toolbar.actions():
             icon = action.icon()
@@ -450,8 +567,7 @@ class HologramViewerWindow(QMainWindow):
         selected = QFileDialog.getExistingDirectory(self, "Select SNOM image folder")
         if selected:
             self.folder_edit.setText(selected)
-            self._clear_loaded_state()
-            self.refresh_plot()
+            self.load_current_folder()
 
     def _current_passage(self) -> str:
         return "forward" if self.forward_radio.isChecked() else "reverse"
@@ -475,20 +591,23 @@ class HologramViewerWindow(QMainWindow):
         self.loaded_by_passage = {}
         self.override_by_passage = {}
         self.loaded_folder_path = None
-        self._sync_advanced_settings()
+        self._sync_tuning_settings()
 
-    def _set_advanced_controls_enabled(self, enabled: bool) -> None:
+    def _set_tuning_controls_enabled(self, enabled: bool) -> None:
         self.shift_edit.setEnabled(enabled)
-        self.width_edit.setEnabled(enabled)
-        self.apply_advanced_button.setEnabled(enabled)
-        self.reset_advanced_button.setEnabled(enabled)
+        self.width_slider.setEnabled(enabled)
+        self.alpha_edit.setEnabled(enabled)
+        self.pad_fact_edit.setEnabled(enabled)
+        self.apply_tuning_button.setEnabled(enabled)
+        self.reset_tuning_button.setEnabled(enabled)
 
-    def _update_advanced_panel(self, checked: bool | None = None) -> None:
+    def _update_tuning_panel(self, checked: bool | None = None) -> None:
         if checked is None:
-            checked = self.show_advanced_checkbox.isChecked()
-        self.advanced_content.setVisible(bool(checked))
+            checked = self.tuning_toggle_button.isChecked()
+        self.tuning_toggle_button.setText("Hide Manual Tuning" if checked else "Show Manual Tuning")
+        self.tuning_content.setVisible(bool(checked))
 
-    def _sync_advanced_settings(self) -> None:
+    def _sync_tuning_settings(self) -> None:
         if self.loaded is None:
             for label in (
                 self.auto_shift_value,
@@ -499,8 +618,13 @@ class HologramViewerWindow(QMainWindow):
             ):
                 label.setText("-")
             self.shift_edit.setText("")
-            self.width_edit.setText("")
-            self._set_advanced_controls_enabled(False)
+            self.width_slider.setRange(0, 0)
+            self.width_slider.setValue(0)
+            self.width_value_label.setText("0")
+            self.alpha_edit.setText("0.3")
+            self.pad_fact_edit.setText("4")
+            self._set_tuning_controls_enabled(False)
+            self.tuning_toggle_button.setChecked(False)
             return
 
         settings = self.loaded.processing_settings
@@ -509,26 +633,74 @@ class HologramViewerWindow(QMainWindow):
         self.zero_order_width_value.setText(f"{settings['zero_order_width_y']:.2f}")
         self.first_order_width_value.setText(f"{settings['first_order_width_y']:.2f}")
         self.shift_edit.setText(str(settings["current_shift_y"]))
-        self.width_edit.setText(str(settings["current_filter_width_y"]))
+        self.alpha_edit.setText(str(settings.get("alpha", 0.3)))
+        self.pad_fact_edit.setText(str(settings.get("pad_fact", 1)))
+        self._set_manual_width_value(int(settings["current_filter_width_y"]))
         harmonic_index = self._current_harmonic()
-        rotation_by_harmonic = settings.get("rotation_angle_deg_by_harmonic", [])
+        diagnostics = settings.get("diagnostics", {})
+        rotation_by_harmonic = diagnostics.get(
+            "rotation_angle_deg_by_harmonic",
+            settings.get("rotation_angle_deg_by_harmonic", []),
+        )
         if settings.get("processing_mode") == "two_sideband" and harmonic_index < len(rotation_by_harmonic):
             rotation_angle = rotation_by_harmonic[harmonic_index]
             self.rotation_angle_value.setText("-" if not np.isfinite(rotation_angle) else f"{rotation_angle:.2f}")
         else:
             self.rotation_angle_value.setText("-")
-        self._set_advanced_controls_enabled(True)
+        self._set_tuning_controls_enabled(True)
+
+    def _on_width_slider_change(self, value: int) -> None:
+        self.width_value_label.setText(str(int(value)))
+
+    def _current_width_limit(self) -> int:
+        if self.loaded is None:
+            return 0
+
+        settings = self.loaded.processing_settings
+        fft_center_row = int(settings.get("fft_center_row", 0))
+        loaded_pad_fact = int(settings.get("pad_fact", 4))
+        if fft_center_row <= 0 or loaded_pad_fact <= 0:
+            return 0
+
+        try:
+            current_pad_fact = int(self.pad_fact_edit.text().strip())
+        except ValueError:
+            current_pad_fact = loaded_pad_fact
+        if current_pad_fact <= 0:
+            current_pad_fact = loaded_pad_fact
+
+        scale_ratio = current_pad_fact / loaded_pad_fact
+        adjusted_fft_center_row = int(round(fft_center_row * scale_ratio))
+        adjusted_fft_height = max(0, 2 * adjusted_fft_center_row)
+        return adjusted_fft_height
+
+    def _set_manual_width_value(self, width: int) -> None:
+        slider_max = self._current_width_limit()
+        clamped_width = max(0, min(int(round(width)), slider_max))
+        self.width_slider.blockSignals(True)
+        self.width_slider.setRange(0, slider_max)
+        self.width_slider.setValue(clamped_width)
+        self.width_slider.blockSignals(False)
+        self.width_value_label.setText(str(clamped_width))
+
+    def _sync_width_slider_bounds(self, *_args) -> None:
+        if self.loaded is None:
+            self.width_slider.setRange(0, 0)
+            self.width_slider.setValue(0)
+            self.width_value_label.setText("0")
+            return
+        self._set_manual_width_value(self.width_slider.value())
 
     def _on_passage_change(self) -> None:
         folder = self.folder_edit.text().strip()
         if folder and os.path.isdir(folder):
             self.load_current_folder()
         else:
-            self._sync_advanced_settings()
+            self._sync_tuning_settings()
 
     def _on_harmonic_change(self) -> None:
         self.refresh_plot()
-        self._sync_advanced_settings()
+        self._sync_tuning_settings()
 
     def _on_processing_mode_change(self) -> None:
         mode = self.processing_mode_combo.currentData()
@@ -541,7 +713,7 @@ class HologramViewerWindow(QMainWindow):
         if folder and os.path.isdir(folder):
             self.load_current_folder(force_reload=True)
         else:
-            self._sync_advanced_settings()
+            self._sync_tuning_settings()
 
     def load_current_folder(self, force_reload: bool = False) -> None:
         folder = self.folder_edit.text().strip()
@@ -564,7 +736,7 @@ class HologramViewerWindow(QMainWindow):
                 f"Loaded cached {PASSAGE_TO_KEYS[self.loaded.passage]['label']} from {self.loaded.folder_path} "
                 f"with cache {self.loaded.cache_path} in {PROCESSING_MODES[self.processing_mode]} mode."
             )
-            self._sync_advanced_settings()
+            self._sync_tuning_settings()
             self.refresh_plot()
             return
 
@@ -575,6 +747,8 @@ class HologramViewerWindow(QMainWindow):
                 passage,
                 carrier_row_override=overrides.get("center_row"),
                 filter_width_override=overrides.get("filter_width_y"),
+                pad_fact=overrides.get("pad_fact", 4),
+                alpha=overrides.get("alpha", 0.3),
                 processing_mode=self.processing_mode,
             )
         except ProcessingError as exc:
@@ -587,36 +761,55 @@ class HologramViewerWindow(QMainWindow):
             f"Loaded {PASSAGE_TO_KEYS[self.loaded.passage]['label']} from {self.loaded.folder_path} "
             f"with cache {self.loaded.cache_path} in {PROCESSING_MODES[self.processing_mode]} mode."
         )
-        self._sync_advanced_settings()
+        self._sync_tuning_settings()
         self.refresh_plot()
 
-    def apply_advanced_settings(self) -> None:
+    def apply_tuning_settings(self) -> None:
         if self.loaded is None:
             return
         try:
             shift_y = int(self.shift_edit.text().strip())
-            filter_width_y = int(self.width_edit.text().strip())
+            filter_width_y = int(self.width_value_label.text().strip())
+            alpha = float(self.alpha_edit.text().strip())
+            pad_fact = int(self.pad_fact_edit.text().strip())
         except ValueError:
-            QMessageBox.critical(self, "Advanced settings", "Shift and width must be integer pixel values.")
-            self.log("Advanced settings error: shift and width must be integer pixel values.")
+            QMessageBox.critical(
+                self,
+                "Tuning settings",
+                "Shift, width, and padding factor must be integers, and alpha must be numeric.",
+            )
+            self.log("Tuning settings error: shift, width, and padding factor must be integers, and alpha must be numeric.")
             return
-        if filter_width_y <= 0:
-            QMessageBox.critical(self, "Advanced settings", "Filter width must be greater than zero.")
-            self.log("Advanced settings error: filter width must be greater than zero.")
+        if not 0.0 <= alpha <= 1.0:
+            QMessageBox.critical(self, "Tuning settings", "Filter alpha must be between 0 and 1.")
+            self.log("Tuning settings error: filter alpha must be between 0 and 1.")
+            return
+        if not 1 <= pad_fact <= 32:
+            QMessageBox.critical(self, "Tuning settings", "Padding factor must be an integer between 1 and 32.")
+            self.log("Tuning settings error: padding factor must be an integer between 1 and 32.")
             return
 
         fft_center_row = self.loaded.processing_settings["fft_center_row"]
+        loaded_pad_fact = int(self.loaded.processing_settings.get("pad_fact", 4))
+        if loaded_pad_fact <= 0:
+            loaded_pad_fact = 4
+        scale_ratio = pad_fact / loaded_pad_fact
+        adjusted_fft_center_row = int(round(fft_center_row * scale_ratio))
+        adjusted_shift_y = int(round(shift_y * scale_ratio))
+        adjusted_filter_width_y = int(round(filter_width_y * scale_ratio))
         overrides = self._current_override_bucket()
         overrides.clear()
         overrides.update({
-            "center_row": fft_center_row - shift_y,
-            "filter_width_y": filter_width_y,
+            "center_row": adjusted_fft_center_row - adjusted_shift_y,
+            "filter_width_y": adjusted_filter_width_y,
+            "alpha": alpha,
+            "pad_fact": pad_fact,
         })
         passage = self._current_passage()
         self.loaded_by_passage.pop(passage, None)
         self.load_current_folder(force_reload=True)
 
-    def reset_advanced_settings(self) -> None:
+    def reset_tuning_settings(self) -> None:
         if self.loaded is None:
             return
         passage = self._current_passage()
@@ -642,20 +835,20 @@ class HologramViewerWindow(QMainWindow):
         self.figure.patch.set_facecolor(COLORS["bg"])
 
     def _style_axis(self, axis, title: str) -> None:
-        axis.set_facecolor("#0a1020")
-        axis.set_title(title, color=COLORS["cyan"], fontsize=18, pad=12)
+        axis.set_facecolor("#101315")
+        axis.set_title(title, color=COLORS["accent"], fontsize=18, pad=12)
         axis.set_xlabel("x", color=COLORS["text"])
         axis.set_ylabel("y", color=COLORS["text"])
         axis.tick_params(colors=COLORS["text"], labelsize=11)
         for spine in axis.spines.values():
-            spine.set_edgecolor(COLORS["cyan_strong"])
+            spine.set_edgecolor(COLORS["accent_strong"])
             spine.set_linewidth(1.15)
 
     def _style_colorbar(self, colorbar) -> None:
         colorbar.outline.set_edgecolor(COLORS["line"])
         colorbar.outline.set_linewidth(1.0)
         colorbar.ax.tick_params(colors=COLORS["text"], labelsize=11)
-        colorbar.ax.set_facecolor("#0a1020")
+        colorbar.ax.set_facecolor("#101315")
 
     def _add_color_slider(
         self,
@@ -664,12 +857,12 @@ class HologramViewerWindow(QMainWindow):
         image: np.ndarray,
         label: str,
         cmap_name: str,
-        accent_color: str = COLORS["cyan_strong"],
+        accent_color: str = COLORS["accent"],
     ) -> None:
         data_min, data_max = self._get_data_range(image)
         slider_min, slider_max = data_min, data_max
 
-        slider_axis.set_facecolor("#0a1020")
+        slider_axis.set_facecolor(COLORS["panel_alt"])
         for spine in slider_axis.spines.values():
             spine.set_edgecolor(COLORS["line"])
         gradient = np.linspace(0, 1, 512)[np.newaxis, :]
@@ -684,13 +877,13 @@ class HologramViewerWindow(QMainWindow):
         )
         slider = RangeSlider(slider_axis, label, data_min, data_max, valinit=(slider_min, slider_max))
         slider.label.set_color(accent_color)
-        slider.valtext.set_color(COLORS["gold"])
+        slider.valtext.set_color(COLORS["accent"])
         slider.track.set_color((1.0, 1.0, 1.0, 0.12))
         slider.poly.set_color(QColor(accent_color).lighter(150).name())
         slider.poly.set_alpha(0.25)
         for handle in slider._handles:
             handle.set_color(QColor(accent_color).name())
-            handle.set_markeredgecolor(COLORS["gold"])
+            handle.set_markeredgecolor(COLORS["accent"])
             handle.set_markeredgewidth(1.4)
 
         def _update(_value) -> None:
@@ -711,6 +904,47 @@ class HologramViewerWindow(QMainWindow):
             except Exception:
                 pass
         self._sliders = []
+
+    def _overlay_fft_marker(self, axis, stage_name: str, image_shape: tuple[int, int]) -> None:
+        if self.loaded is None or stage_name not in {"mag_signal_ft", "filtered_shift"}:
+            return
+
+        settings = self.loaded.processing_settings
+        row = None
+        filter_width_y = None
+        if stage_name == "mag_signal_ft":
+            row = settings.get("current_center_row")
+            filter_width_y = settings.get("current_filter_width_y")
+        elif stage_name == "filtered_shift":
+            row = settings.get("fft_center_row")
+
+        if row is None:
+            return
+
+        if stage_name == "mag_signal_ft" and filter_width_y is not None:
+            half_width = float(filter_width_y) / 2.0
+            for boundary_row in (row - half_width, row + half_width):
+                axis.axhline(
+                    boundary_row,
+                    color=COLORS["accent_strong"],
+                    linestyle="--",
+                    linewidth=1.2,
+                    alpha=0.9,
+                    zorder=4,
+                )
+
+        col = image_shape[1] // 2
+        axis.plot(
+            [col],
+            [row],
+            marker="*",
+            markersize=14,
+            markerfacecolor=COLORS["accent"],
+            markeredgecolor="#fff4df",
+            markeredgewidth=1.2,
+            linestyle="None",
+            zorder=5,
+        )
 
     def refresh_plot(self) -> None:
         self._disconnect_sliders()
@@ -760,7 +994,7 @@ class HologramViewerWindow(QMainWindow):
                 placeholder,
                 "Amplitude",
                 VIEW_CMAPS[("processed", "amplitude")],
-                accent_color=COLORS["cyan_strong"],
+                accent_color=COLORS["accent_strong"],
             )
             self._add_color_slider(
                 phase_slider_axis,
@@ -768,7 +1002,7 @@ class HologramViewerWindow(QMainWindow):
                 placeholder,
                 "Phase",
                 VIEW_CMAPS[("processed", "phase")],
-                accent_color=COLORS["magenta_strong"],
+                accent_color=COLORS["accent"],
             )
             self.canvas.draw_idle()
             return
@@ -809,6 +1043,7 @@ class HologramViewerWindow(QMainWindow):
             cmap=VIEW_CMAPS[(stage_name, "amplitude")],
         )
         self._style_axis(amplitude_axis, f"H{harmonic_index} {STAGE_LABELS[stage_name]} Amplitude")
+        self._overlay_fft_marker(amplitude_axis, stage_name, amplitude_image.shape)
         amplitude_colorbar = self.figure.colorbar(amplitude_artist, ax=amplitude_axis, fraction=0.046, pad=0.04)
         self._style_colorbar(amplitude_colorbar)
         self._add_color_slider(
@@ -817,7 +1052,7 @@ class HologramViewerWindow(QMainWindow):
             amplitude_image,
             "Amplitude",
             VIEW_CMAPS[(stage_name, "amplitude")],
-            accent_color=COLORS["cyan_strong"],
+            accent_color=COLORS["accent_strong"],
         )
 
         if phase_image is None:
@@ -845,7 +1080,7 @@ class HologramViewerWindow(QMainWindow):
                 phase_image,
                 "Phase",
                 VIEW_CMAPS[(stage_name, "phase")],
-                accent_color=COLORS["magenta_strong"],
+                accent_color=COLORS["accent"],
             )
 
         self.canvas.draw_idle()
