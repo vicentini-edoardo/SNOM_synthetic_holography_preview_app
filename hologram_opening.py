@@ -269,7 +269,7 @@ def pad_vertical_and_fft(signal_in: np.ndarray, pad_fact: int) -> tuple[FourierA
     stop_y = start_y + n_y
     signal_pad[start_y:stop_y, :] = signal_in
 
-    signal_ft = fftshift(fft2(signal_pad))
+    signal_ft = fftshift(fft2(signal_pad, workers=-1))
     magnitude_ft = np.abs(signal_ft)
     vertical_profile = build_vertical_profile(magnitude_ft)
     analysis = FourierAnalysis(
@@ -391,13 +391,13 @@ def reconstruct_from_sidebands(
         filtered_negative = analysis.signal_ft * negative_mask
         centered_negative = _shift_rows_to_center(filtered_negative, geometry.mirror_row, fft_center_row)
 
-        field_positive = ifft2(ifftshift(centered_positive))
-        field_negative = ifft2(ifftshift(centered_negative))
+        field_positive = ifft2(ifftshift(centered_positive), workers=-1)
+        field_negative = ifft2(ifftshift(centered_negative), workers=-1)
         processed_full_rotated = 0.5 * (np.conj(field_positive) + field_negative)
         processed_full = processed_full_rotated * np.exp(1j * rotation_angle_rad)
-        filtered_shift = fftshift(fft2(processed_full))
+        filtered_shift = fftshift(fft2(processed_full, workers=-1))
     else:
-        processed_full = ifft2(ifftshift(centered_positive))
+        processed_full = ifft2(ifftshift(centered_positive), workers=-1)
         filtered_shift = centered_positive
 
     processed_cropped = processed_full[crop_y.start_y : crop_y.stop_y, :]
@@ -413,20 +413,56 @@ def build_view_stages(raw_image: np.ndarray, reconstruction: HologramReconstruct
     )
 
 
-def reconstruct_hologram(
+@dataclass(frozen=True)
+class HologramAnalysis:
+    """Forward-transform results that are independent of the chosen sideband band.
+
+    The padded forward FFT (the dominant cost of hologram opening) only depends
+    on the input image, ``pad_fact`` and ``processing_mode`` - not on the carrier
+    row or filter width. Computing it once lets callers re-filter the same
+    spectrum with different manual overrides without paying for another FFT.
+    """
+
+    signal_in: np.ndarray
+    rotation_angle_rad: float
+    analysis: FourierAnalysis
+    crop_y: VerticalCropBounds
+    pad_fact: int
+    processing_mode: str
+
+
+def analyze_hologram(
     image_complex_in_2d: np.ndarray,
     pad_fact: int = 4,
+    processing_mode: str = "two_sideband",
+) -> HologramAnalysis:
+    """Run only the band-independent forward transform of a complex hologram."""
+    signal_in, rotation_angle_rad = prepare_signal_for_mode(image_complex_in_2d, processing_mode)
+    analysis, crop_y = pad_vertical_and_fft(signal_in, pad_fact)
+    return HologramAnalysis(
+        signal_in=signal_in,
+        rotation_angle_rad=rotation_angle_rad,
+        analysis=analysis,
+        crop_y=crop_y,
+        pad_fact=pad_fact,
+        processing_mode=processing_mode,
+    )
+
+
+def reconstruct_from_analysis(
+    image_complex_in_2d: np.ndarray,
+    holo_analysis: HologramAnalysis,
     alpha: float = 0.3,
     carrier_row: int | None = None,
     filter_width_y: int | None = None,
-    processing_mode: str = "two_sideband",
 ) -> HologramReconstruction:
-    signal_in, rotation_angle_rad = prepare_signal_for_mode(image_complex_in_2d, processing_mode)
-    analysis, crop_y = pad_vertical_and_fft(signal_in, pad_fact)
+    """Reconstruct a hologram from a precomputed :class:`HologramAnalysis`."""
+    analysis = holo_analysis.analysis
+    processing_mode = holo_analysis.processing_mode
     geometry = analyze_vertical_spectrum(
         analysis,
-        pad_fact=pad_fact,
-        crop_y=crop_y,
+        pad_fact=holo_analysis.pad_fact,
+        crop_y=holo_analysis.crop_y,
         carrier_row_override=carrier_row,
         filter_width_override=filter_width_y,
         processing_mode=processing_mode,
@@ -436,11 +472,11 @@ def reconstruct_hologram(
         geometry,
         processing_mode=processing_mode,
         alpha=alpha,
-        rotation_angle_rad=rotation_angle_rad,
+        rotation_angle_rad=holo_analysis.rotation_angle_rad,
     )
-    reconstruction = HologramReconstruction(
+    return HologramReconstruction(
         processing_mode=processing_mode,
-        rotation_angle_rad=rotation_angle_rad,
+        rotation_angle_rad=holo_analysis.rotation_angle_rad,
         geometry=geometry,
         analysis=analysis,
         processed_full=processed_full,
@@ -453,7 +489,24 @@ def reconstruct_hologram(
             filtered_shift=filtered_shift,
         ),
     )
-    return reconstruction
+
+
+def reconstruct_hologram(
+    image_complex_in_2d: np.ndarray,
+    pad_fact: int = 4,
+    alpha: float = 0.3,
+    carrier_row: int | None = None,
+    filter_width_y: int | None = None,
+    processing_mode: str = "two_sideband",
+) -> HologramReconstruction:
+    holo_analysis = analyze_hologram(image_complex_in_2d, pad_fact=pad_fact, processing_mode=processing_mode)
+    return reconstruct_from_analysis(
+        image_complex_in_2d,
+        holo_analysis,
+        alpha=alpha,
+        carrier_row=carrier_row,
+        filter_width_y=filter_width_y,
+    )
 
 
 def correct_baseline_slope(z_values: np.ndarray) -> np.ndarray:

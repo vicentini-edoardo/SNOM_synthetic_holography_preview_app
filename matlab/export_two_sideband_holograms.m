@@ -588,10 +588,17 @@ function width = estimate_filter_width(profile, carrierRow)
     centerIdx = floor(numel(profile) / 2) + 1;
     distanceToZeroOrder = abs(carrierRow - centerIdx);
     distanceToEdge = min(carrierRow - 1, numel(profile) - carrierRow);
-    width = floor(min(distanceToZeroOrder, distanceToEdge));
+    % Match Python _estimate_filter_width: also cap the width so the band does
+    % not reach the second-order sideband (computed on 0-based indices to mirror
+    % the Python implementation exactly).
+    carrierZeroBased = carrierRow - 1;
+    centerZeroBased = centerIdx - 1;
+    secondOrderCap = carrierZeroBased - abs(centerZeroBased - 2 * carrierZeroBased);
+    width = floor(min([distanceToZeroOrder, distanceToEdge, secondOrderCap]));
     if width < 2
         error('export_two_sideband_holograms:FilterWidthFailed', ...
-            'Detected carrier is too close to the zero order to build a stable filter.');
+            ['Detected carrier is too close to the edge or zero order to build a ', ...
+             'stable filter without second-order aliasing.']);
     end
 end
 

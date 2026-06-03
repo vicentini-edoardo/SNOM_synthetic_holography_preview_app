@@ -634,7 +634,7 @@ class HologramViewerWindow(QMainWindow):
         self.first_order_width_value.setText(f"{settings['first_order_width_y']:.2f}")
         self.shift_edit.setText(str(settings["current_shift_y"]))
         self.alpha_edit.setText(str(settings.get("alpha", 0.3)))
-        self.pad_fact_edit.setText(str(settings.get("pad_fact", 1)))
+        self.pad_fact_edit.setText(str(settings.get("pad_fact", 4)))
         self._set_manual_width_value(int(settings["current_filter_width_y"]))
         harmonic_index = self._current_harmonic()
         diagnostics = settings.get("diagnostics", {})
@@ -691,7 +691,12 @@ class HologramViewerWindow(QMainWindow):
             return
         self._set_manual_width_value(self.width_slider.value())
 
-    def _on_passage_change(self) -> None:
+    def _on_passage_change(self, checked: bool = True) -> None:
+        # Each radio toggle emits two signals (the deselected and the selected
+        # button). Only react to the button that became active so the folder is
+        # not reloaded twice per passage switch.
+        if not checked:
+            return
         folder = self.folder_edit.text().strip()
         if folder and os.path.isdir(folder):
             self.load_current_folder()

@@ -63,7 +63,7 @@ Vicentini, E. (2026). SNOM synthetic holography preview app [Computer software].
 Two example notebooks are included under [`output/jupyter-notebook`](./output/jupyter-notebook):
 
 - [`simple-two-sideband-processing-example.ipynb`](./output/jupyter-notebook/simple-two-sideband-processing-example.ipynb): app-facing example that uses `processing.load_passage(...)` and `processing.get_view_image(...)` to load a dataset folder, select a passage/harmonic, optionally override the filter vertical center and width, and inspect raw, processed, Fourier-magnitude, and filtered-shift views for two-sideband processing.
-- [`standalone-hologram-opening-example.ipynb`](./output/jupyter-notebook/standalone-hologram-opening-example.ipynb): lower-level example that calls `hologram_opening.reconstruct_hologram(...)` directly in one-sideband and two-sideband modes. It can run either on a measured dataset or on the built-in synthetic fallback, and also exposes manual filter-center and filter-width overrides.
+- [`standalone-hologram-opening-example.ipynb`](./output/jupyter-notebook/standalone-hologram-opening-example.ipynb): lower-level example that calls `hologram_opening.reconstruct_hologram(...)` directly in one-sideband and two-sideband modes. It can run either on a measured dataset or on the built-in synthetic fallback, and also exposes manual filter-center and filter-width overrides. It additionally demonstrates the `analyze_hologram(...)` / `reconstruct_from_analysis(...)` pair, which runs the expensive forward FFT once and re-filters the cached spectrum for multiple manual overrides without recomputing it.
 
 Launch Jupyter from the repository root:
 
@@ -95,16 +95,37 @@ Amplitude / phase harmonic pairs are combined internally into complex-valued har
 5. Isolate the sideband, shift it to the Fourier center, and inverse transform.
 6. Preview amplitude, phase, and intermediate stages in the GUI.
 
+## Performance Notes
+
+The reconstruction pipeline is optimized for interactive use:
+
+- **Multi-threaded FFTs.** All padded forward and inverse transforms run through
+  `scipy.fft` with `workers=-1`, using every available CPU core. The padded FFT
+  (default `pad_fact=4`) is the dominant cost, so this scales well on large scans.
+- **Single forward transform per tuning change.** Manual carrier-row and
+  filter-width overrides only change which Fourier band is filtered, not the
+  forward transform itself. The reference harmonic is transformed once via
+  `analyze_hologram(...)` and re-filtered with `reconstruct_from_analysis(...)`,
+  so applying a manual override no longer recomputes the FFT.
+- **Per-passage in-memory caching.** Loaded passages are cached by passage and
+  processing mode inside the viewer, so toggling between forward/reverse or
+  revisiting a harmonic does not reprocess the dataset.
+- **On-disk `.npz` cache.** Raw `.gsf` files are bundled into a compressed
+  `<image_name>_all_data.npz` cache on first load and reused afterwards. The
+  cache is loaded without `allow_pickle`, since it holds only numeric arrays.
+
 ## Exported Files
 
-`Export All` writes the existing raw / processed PNG set only.
+`Export All` writes the raw / processed image set as both PNG previews and
+whitespace-delimited `.txt` grids (one numeric row per image row, re-loadable
+with `numpy.loadtxt` or MATLAB `load`).
 
-For each harmonic `1..5`, the app exports:
+For each harmonic `0..5`, the app exports:
 
-- `h{n}_raw_amplitude.png`
-- `h{n}_raw_phase.png`
-- `h{n}_processed_amplitude.png`
-- `h{n}_processed_phase.png`
+- `h{n}_raw_amplitude.png` / `h{n}_raw_amplitude.txt`
+- `h{n}_raw_phase.png` / `h{n}_raw_phase.txt`
+- `h{n}_processed_amplitude.png` / `h{n}_processed_amplitude.txt`
+- `h{n}_processed_phase.png` / `h{n}_processed_phase.txt`
 
 ## Project Structure
 

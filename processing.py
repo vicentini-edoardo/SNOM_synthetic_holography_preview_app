@@ -10,9 +10,10 @@ from matplotlib.figure import Figure
 from hologram_opening import (
     PROCESSING_MODES,
     ProcessingError,
-    build_vertical_profile,
+    analyze_hologram,
     measure_profile_width,
     processed_phase,
+    reconstruct_from_analysis,
     reconstruct_hologram,
 )
 
@@ -82,8 +83,9 @@ def _harmonic_presence(image_folder: str, image_name: str, mode: str) -> list[in
 
 
 def _harmonic_is_present(stack: np.ndarray, harmonic: int) -> bool:
-    slice_ = stack[:, :, harmonic]
-    return not np.all(np.isnan(np.real(slice_)) & np.isnan(np.imag(slice_)))
+    # Missing harmonics are filled with NaN+1j*NaN; np.isnan on a complex array is
+    # True where either component is NaN, so a single pass identifies an empty slot.
+    return not np.isnan(stack[:, :, harmonic]).all()
 
 
 def build_or_load_cache(folder_path: str, force_rebuild: bool = False) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
@@ -122,8 +124,8 @@ def build_or_load_cache(folder_path: str, force_rebuild: bool = False) -> tuple[
 
         np.savez_compressed(cache_path, **all_data)
 
-    cache = np.load(cache_path, allow_pickle=True)
-    data = {key: cache[key] for key in cache.files}
+    with np.load(cache_path) as cache:
+        data = {key: cache[key] for key in cache.files}
     metadata = {
         "folder_path": folder_path,
         "image_name": image_name,
@@ -211,12 +213,13 @@ def process_stack(
     if not _harmonic_is_present(raw_stack, reference_harmonic):
         raise ProcessingError("The raw stack is missing harmonic index 2 required for hologram opening.")
 
-    auto_result = reconstruct_hologram(
-        raw_stack[:, :, reference_harmonic],
-        pad_fact=pad_fact,
-        alpha=alpha,
-        processing_mode=processing_mode,
-    )
+    # The padded forward FFT is the dominant cost. It is identical for the
+    # automatic and manual passes (overrides only change which band is filtered),
+    # so compute it once and reuse it for both the auto geometry and the final
+    # reconstruction of the reference harmonic.
+    reference_image = raw_stack[:, :, reference_harmonic]
+    reference_analysis = analyze_hologram(reference_image, pad_fact=pad_fact, processing_mode=processing_mode)
+    auto_result = reconstruct_from_analysis(reference_image, reference_analysis, alpha=alpha)
     auto_geometry = auto_result.geometry
     auto_vertical_profile = auto_result.analysis.vertical_profile
     zero_order_width_y = measure_profile_width(auto_vertical_profile, auto_geometry.fft_center_row)
@@ -230,13 +233,12 @@ def process_stack(
 
     reference_result = auto_result
     if is_manual:
-        reference_result = reconstruct_hologram(
-            raw_stack[:, :, reference_harmonic],
-            pad_fact=pad_fact,
+        reference_result = reconstruct_from_analysis(
+            reference_image,
+            reference_analysis,
             alpha=alpha,
             carrier_row=current_center_row,
             filter_width_y=current_filter_width_y,
-            processing_mode=processing_mode,
         )
         current_center_row = reference_result.geometry.carrier_row
         current_filter_width_y = reference_result.geometry.filter_width_y
@@ -386,6 +388,12 @@ def _export_figure(image: np.ndarray, title: str, output_path: str, cmap: str) -
     figure.savefig(output_path)
 
 
+def _export_text(image: np.ndarray, title: str, output_path: str) -> None:
+    # Save the raw numeric image as a whitespace-delimited grid (one row per
+    # image row) so the exported data can be re-loaded with numpy/MATLAB.
+    np.savetxt(output_path, np.asarray(image, dtype=float), fmt="%.6g", header=title)
+
+
 def export_all_views(loaded: LoadedData) -> list[str]:
     validate_passage_data(
         {PASSAGE_TO_KEYS[loaded.passage]["o"]: loaded.o, PASSAGE_TO_KEYS[loaded.passage]["z"]: loaded.z},
@@ -408,8 +416,11 @@ def export_all_views(loaded: LoadedData) -> list[str]:
                 representation,
                 processing_settings=loaded.processing_settings,
             )
-            output_path = os.path.join(loaded.folder_path, f"h{harmonic}_{name}.png")
             title = f"H{harmonic} {STAGE_LABELS[stage_name]} {representation.capitalize()} - {loaded.image_name}"
-            _export_figure(image, title, output_path, cmap)
-            exported_files.append(output_path)
+            image_path = os.path.join(loaded.folder_path, f"h{harmonic}_{name}.png")
+            _export_figure(image, title, image_path, cmap)
+            exported_files.append(image_path)
+            text_path = os.path.join(loaded.folder_path, f"h{harmonic}_{name}.txt")
+            _export_text(image, title, text_path)
+            exported_files.append(text_path)
     return exported_files
