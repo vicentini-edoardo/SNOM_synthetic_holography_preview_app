@@ -26,7 +26,7 @@ python3 main.py
 - Run:
 
 ```bash
-python3 -m py_compile main.py viewer.py processing.py
+python3 -m py_compile main.py viewer.py processing.py hologram_opening.py
 ```
 
 - Verify the GUI starts.
