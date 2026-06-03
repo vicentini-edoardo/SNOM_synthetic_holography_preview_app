@@ -116,14 +116,16 @@ The reconstruction pipeline is optimized for interactive use:
 
 ## Exported Files
 
-`Export All` writes the existing raw / processed PNG set only.
+`Export All` writes the raw / processed image set as both PNG previews and
+whitespace-delimited `.txt` grids (one numeric row per image row, re-loadable
+with `numpy.loadtxt` or MATLAB `load`).
 
-For each harmonic `1..5`, the app exports:
+For each harmonic `0..5`, the app exports:
 
-- `h{n}_raw_amplitude.png`
-- `h{n}_raw_phase.png`
-- `h{n}_processed_amplitude.png`
-- `h{n}_processed_phase.png`
+- `h{n}_raw_amplitude.png` / `h{n}_raw_amplitude.txt`
+- `h{n}_raw_phase.png` / `h{n}_raw_phase.txt`
+- `h{n}_processed_amplitude.png` / `h{n}_processed_amplitude.txt`
+- `h{n}_processed_phase.png` / `h{n}_processed_phase.txt`
 
 ## Project Structure
 

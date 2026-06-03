@@ -388,6 +388,12 @@ def _export_figure(image: np.ndarray, title: str, output_path: str, cmap: str) -
     figure.savefig(output_path)
 
 
+def _export_text(image: np.ndarray, title: str, output_path: str) -> None:
+    # Save the raw numeric image as a whitespace-delimited grid (one row per
+    # image row) so the exported data can be re-loaded with numpy/MATLAB.
+    np.savetxt(output_path, np.asarray(image, dtype=float), fmt="%.6g", header=title)
+
+
 def export_all_views(loaded: LoadedData) -> list[str]:
     validate_passage_data(
         {PASSAGE_TO_KEYS[loaded.passage]["o"]: loaded.o, PASSAGE_TO_KEYS[loaded.passage]["z"]: loaded.z},
@@ -410,8 +416,11 @@ def export_all_views(loaded: LoadedData) -> list[str]:
                 representation,
                 processing_settings=loaded.processing_settings,
             )
-            output_path = os.path.join(loaded.folder_path, f"h{harmonic}_{name}.png")
             title = f"H{harmonic} {STAGE_LABELS[stage_name]} {representation.capitalize()} - {loaded.image_name}"
-            _export_figure(image, title, output_path, cmap)
-            exported_files.append(output_path)
+            image_path = os.path.join(loaded.folder_path, f"h{harmonic}_{name}.png")
+            _export_figure(image, title, image_path, cmap)
+            exported_files.append(image_path)
+            text_path = os.path.join(loaded.folder_path, f"h{harmonic}_{name}.txt")
+            _export_text(image, title, text_path)
+            exported_files.append(text_path)
     return exported_files
